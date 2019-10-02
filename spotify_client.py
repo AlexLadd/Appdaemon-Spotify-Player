@@ -1,54 +1,14 @@
 """
-EVENT PARAMETERS:
 
-REQUIRED:
-Event name: 'spotify.play' (or your defined event_name in the app config)
-device: Spotify device name (aliases may be used if you have defined device_aliases in the app config)
+Appdaemon app to play Spotify songs on a Spotify connected device 
+using an event fired from Home Assistant or Appdaemon.
 
-OPTIONAL:
-*** Do not set unwanted parameters to 'False' or 'off', simply leave them out (if they are set at all they will be interpreted as 'on' or 'True') ***
+Written by Alex Ladd http://github.com/AlexLadd
 
-track: Spotify track uri or song name
-playlist: Spotify playlist uri or playlist name
-album: Spotify album uri or album name
-artist: Spotify artist uri or artist name
+Contributors:
+Daniel Lashua http://github.com/dlashua
 
-username: Spotify username (aliases may be used if you have defined user_aliases in the app config)
-genre: Genre of music to find a recommendation for (Not very useful by itself but can be helpful with other parameters)
-category: Category of music to find a recommendation for 
-featured: Make a recommendation from featured playlists
-new_releases: Make a recommendation from newly releases albums
-similar: Find music similar to the input parameters but not the same (For example find artist similar to 'Pink Floyd' but not the same)
-
-random_start: Start at a random position in the playlist, album or list of tracks
-random_search: Randomize the search results (randomly choose albums from artist, randomly choose 1 track from many, randomly choose a user playlist, etc)
-shuffle: Set Spotify shuffle state to 'on'
-Repeat: Set repeat to one of 'track', 'context', 'off'
-single: If specified only a single track will play regardless of which other options have been chosen (takes priority over multiple)
-multiple: If specified multiple tracks will play
-
-FULL APP CONFIG EXAMPLE:
-
-spotify_client:
-  module: spotify_client
-  class: SpotifyClient
-  debugging: True
-  username: xxxxxxxxxx@gmail.com
-  password: xxxxxxxxx
-  country: CA
-  language: en_CA
-  user_aliases:
-    ha : xxxxxxxx
-    alex : xxxxxxxxx
-    steph : xxxxxxxx
-  device_aliases:
-    office : Office Speaker
-    master : Master Bedroom Speaker
-    living room : Family Room Speaker
-    basement : Basement Speaker
-    upstairs : Upstairs Speakers
-    everywhere : All Speakers
-    no bedrooms : All Except Bedrooms
+Updated: 2019-10-02
 
 """
 
@@ -183,7 +143,7 @@ class SpotifyClient(hass.Hass):
     # arbitrary value and can be static
     cookies = {"__bon": "MHwwfC01ODc4MjExMzJ8LTI0Njg4NDg3NTQ0fDF8MXwxfDE="}
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_2) \
-                  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"
+      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"
     headers = {'user-agent': user_agent}
     
     session = requests.Session()
