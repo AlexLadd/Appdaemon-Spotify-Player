@@ -87,6 +87,7 @@ parameter to be used simply remove it from the event.
 * repeat: Set repeat to one of 'track', 'context', 'off'
 * single: If specified only a single track will play regardless of which other options have been chosen (takes priority over multiple)
 * multiple: If specified multiple tracks will play
+* number_tracks: The desired number of tracks to be played, this is not a guarantee (multiple & single take priority)
 
 ### Examples (for Appdaemon)
 Note: These can all be played from Home Assistant by firing an event called 'spotify.play' with the added parameters
