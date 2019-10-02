@@ -92,31 +92,31 @@ parameter to be used simply remove it from the event.
 Note: These can all be played from Home Assistant by firing an event called 'spotify.play' with the added parameters
 
 Play a playlist from a Spotify uri and randomize the starting position
-  self.fire_event('spotify.play', device='office', playlist='spotify:playlist:37i9dQZF1DWXRqgorJj26U', random_start=True)
+```self.fire_event('spotify.play', device='office', playlist='spotify:playlist:37i9dQZF1DWXRqgorJj26U', random_start=True)```
 
 Play a track from a Spotify track uri and play multiple songs that are similar afterwards
-  self.fire_event('spotify.play', device='office', track=spotify:track:6mFkJmJqdDVQ1REhVfGgd1, multiple=True)
+```self.fire_event('spotify.play', device='office', track=spotify:track:6mFkJmJqdDVQ1REhVfGgd1, multiple=True)```
 
 Play the playlist called "Alex's songs" from user 'alex' and randomize the starting position
-  self.fire_event('spotify.play', device='office', username='alex', playlist="Alex's songs", random_start=True)
+```self.fire_event('spotify.play', device='office', username='alex', playlist="Alex's songs", random_start=True)```
 
 Play music from the category rock
-  self.fire_event('spotify.play', device='office', category='rock')
+```self.fire_event('spotify.play', device='office', category='rock')```
 
 Play a random album from newly released Spotify albums
-  self.fire_event('spotify.play', device='office', new_releases=True, random_search=True)
+```self.fire_event('spotify.play', device='office', new_releases=True, random_search=True)```
 
 Play something from Pink Floyd and make sure multiple songs are played
-  self.fire_event('spotify.play', device='master', artist='Pink Floyd', multiple='on', random_search='on')
+```self.fire_event('spotify.play', device='master', artist='Pink Floyd', multiple='on', random_search='on')```
 
 Play a SINGLE track only from the album 'The Wall' 
-  self.fire_event('spotify.play', device='master', album='The Wall', single='yes please')
+```self.fire_event('spotify.play', device='master', album='The Wall', single='yes please')```
 
 Play an album similar to 'The Wall' but not the same
-  self.fire_event('spotify.play', device='office', album='The Wall', similar=True, random=True)
+```self.fire_event('spotify.play', device='office', album='The Wall', similar=True, random=True)```
 
 Play the album the 'The Wall' with shuffle turned on
-  self.fire_event('spotify.play', device='office', album='The Wall', shuffle=True)
+```self.fire_event('spotify.play', device='office', album='The Wall', shuffle=True)```
 
 
 ## Contributors
