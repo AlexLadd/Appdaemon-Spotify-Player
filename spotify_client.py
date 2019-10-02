@@ -1,14 +1,55 @@
 """
+EVENT PARAMETERS:
 
-Appdaemon app to play Spotify songs on a Spotify connected device 
-using an event fired from Home Assistant or Appdaemon.
+REQUIRED:
+Event name: 'spotify.play' (or your defined event_name in the app config)
+device: Spotify device name (aliases may be used if you have defined device_aliases in the app config)
 
-Written by Alex Ladd http://github.com/AlexLadd
+OPTIONAL:
+*** Do not set unwanted parameters to 'False' or 'off', simply leave them out (if they are set at all they will be interpreted as 'on' or 'True') ***
 
-Contributors:
-Daniel Lashua http://github.com/dlashua
+track: Spotify track uri or song name
+playlist: Spotify playlist uri or playlist name
+album: Spotify album uri or album name
+artist: Spotify artist uri or artist name
 
-Updated: 2019-10-02
+username: Spotify username (aliases may be used if you have defined user_aliases in the app config)
+genre: Genre of music to find a recommendation for (Not very useful by itself but can be helpful with other parameters)
+category: Category of music to find a recommendation for 
+featured: Make a recommendation from featured playlists
+new_releases: Make a recommendation from newly releases albums
+similar: Find music similar to the input parameters but not the same (For example find artist similar to 'Pink Floyd' but not the same)
+
+random_start: Start at a random position in the playlist, album or list of tracks
+random_search: Randomize the search results (randomly choose albums from artist, randomly choose 1 track from many, randomly choose a user playlist, etc)
+shuffle: Set Spotify shuffle state to 'on'
+Repeat: Set repeat to one of 'track', 'context', 'off'
+single: If specified only a single track will play regardless of which other options have been chosen (takes priority over multiple)
+multiple: If specified multiple tracks will play
+
+FULL APP CONFIG EXAMPLE:
+
+spotify_client:
+  module: spotify_client
+  class: SpotifyClient
+  event_domain_name: my_custom_domain (optional)
+  debugging: True
+  username: xxxxxxxxxx@gmail.com
+  password: xxxxxxxxx
+  country: CA (optional)
+  language: en_CA (optional)
+  user_aliases: (optional)
+    ha : xxxxxxxx
+    alex : xxxxxxxxx
+    steph : xxxxxxxx
+  device_aliases: (optional)
+    office : Office Speaker
+    master : Master Bedroom Speaker
+    living room : Family Room Speaker
+    basement : Basement Speaker
+    upstairs : Upstairs Speakers
+    everywhere : All Speakers
+    no bedrooms : All Except Bedrooms
 
 """
 
@@ -31,9 +72,10 @@ CONF_COUNTRY = 'country'
 CONF_LANGUAGE = 'language'
 CONF_USER_ALIASES = 'user_aliases'
 CONF_DEVICE_ALIASES = 'device_aliases'
-CONF_EVENT_NAME = 'event_name'
+CONF_EVENT_DOMAIN_NAME = 'event_domain_name'
 
-DEFAULT_EVENT_NAME = 'spotify.play'
+DEFAULT_EVENT_DOMAIN_NAME = 'spotify'
+DEFAULT_EVENT_PLAY = '.play'
 DEFAULT_COUNTRY = 'CA'
 DEFAULT_LANGUAGE = 'en_CA'
 
@@ -64,7 +106,7 @@ SPOTIFY_CLIENT_SCHEMA = vol.Schema(
   {
     vol.Required(CONF_USERNAME): str,                                               # Spotify username
     vol.Required(CONF_PASSWORD): str,                                               # Spotify password
-    vol.Optional(CONF_EVENT_NAME, default=DEFAULT_EVENT_NAME): str,                 # Change the default event name from 'spotify.play'
+    vol.Optional(CONF_EVENT_DOMAIN_NAME, default=DEFAULT_EVENT_DOMAIN_NAME): str,   # Change the default event domain name from 'spotify'
     vol.Optional(CONF_DEBUGGING, default=False): bool,                              # Adjust the verbosity of the logging output
     vol.Optional(CONF_COUNTRY, default=DEFAULT_COUNTRY): _is_spotify_country,       # Your country
     vol.Optional(CONF_LANGUAGE, default=DEFAULT_LANGUAGE): _is_spotify_language,    # Your language
@@ -79,7 +121,8 @@ class SpotifyClient(hass.Hass):
 
   def initialize(self):
     config = SPOTIFY_CLIENT_SCHEMA(self.args)
-    self._event_name = config.get(CONF_EVENT_NAME)
+    self._event_domain_name = config.get(CONF_EVENT_DOMAIN_NAME)
+    self._event_name = self._event_domain_name + DEFAULT_EVENT_PLAY
     self._debugging = config.get(CONF_DEBUGGING)
     self._username = config.get(CONF_USERNAME)
     self._password = config.get(CONF_PASSWORD)
@@ -143,7 +186,7 @@ class SpotifyClient(hass.Hass):
     # arbitrary value and can be static
     cookies = {"__bon": "MHwwfC01ODc4MjExMzJ8LTI0Njg4NDg3NTQ0fDF8MXwxfDE="}
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_2) \
-      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"
+                  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"
     headers = {'user-agent': user_agent}
     
     session = requests.Session()
