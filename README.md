@@ -95,7 +95,7 @@ Play a playlist from a Spotify uri and randomize the starting position
 ```self.fire_event('spotify.play', device='office', playlist='spotify:playlist:37i9dQZF1DWXRqgorJj26U', random_start=True)```
 
 Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
-```self.fire_event('spotify.play', device='office', track=spotify:track:6mFkJmJqdDVQ1REhVfGgd1, multiple=True)```
+```self.fire_event('spotify.play', device='office', track='spotify:track:6mFkJmJqdDVQ1REhVfGgd1', multiple=True)```
 
 Play the playlist called "Alex's songs" from user 'alex' and randomize the starting position  
 ```self.fire_event('spotify.play', device='office', username='alex', playlist="Alex's songs", random_start=True)```
