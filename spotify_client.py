@@ -1175,9 +1175,9 @@ class SpotifyClient(hass.Hass):
       self.log("Invalid repeat state specified: {}, choose one of 'track', 'context', 'off'".format(repeat), level='WARNING')
       repeat = 'off' 
     try:
-      num_tracks = int(d.get('number_tracks', 0))                       # The number of tracks a user would like to hear (single and multiple will take priority over this)
+      num_tracks = int(d.get('tracks', 0))                       # The number of tracks a user would like to hear (single and multiple will take priority over this)
     except ValueError:
-      self.log('Please specifiy a number for number_tracks.')
+      self.log('Please specifiy a number for "tracks".')
       num_tracks = 0
 
     if not similar:
