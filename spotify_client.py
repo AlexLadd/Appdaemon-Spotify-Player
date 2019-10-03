@@ -1,5 +1,5 @@
 """
-Appdaemon app to play Spotify songs on a Spotify connected device  using an event fired from Home Assistant or Appdaemon.
+Appdaemon app to play Spotify songs on a Spotify connected device using an event fired from Home Assistant or Appdaemon.
 
 See https://github.com/AlexLadd/Appdaemon-Spotify-Player/blob/master/spotify_client.py for configuration and examples.
 """
@@ -106,12 +106,13 @@ class SpotifyClient(hass.Hass):
     self._spotify_devices = {}        # Spotify device_name -> device_id
     self._last_cast = None            # The cast device that was last used
     self._play_retry_count = 0        # Current number of song replay tries
+    self._snapshot_info = {}          # Captured snapshot information
 
     # Register the Spotify play event listener
-    self.handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_play)
+    self._handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_play)
 
     # Register the Spotify play event listener
-    self.handle_spotify_play = self.listen_event(self._spotify_controls_event_callback, event=self._event_controls)
+    self._handle_spotify_controls = self.listen_event(self._spotify_controls_event_callback, event=self._event_controls)
 
     # Spotify web token is valid for 3600 seconds, so renew before 1 hour expires
     self.run_every(self._renew_spotify_token, self.datetime() + datetime.timedelta(seconds=2), 3500)
@@ -299,7 +300,7 @@ class SpotifyClient(hass.Hass):
     # Play song on spotify device if found
     if dev_id:
       self._play_on_spotify_device(dev_id, uri, offset)
-      self._log_action_from_uri(uri, device)
+      self._log_playback_action(uri, device)
     else:
       self.log('Could not find device "{}" in Spotify, no song will play. Discovered Chromecast devices: {}, Spotify devices: {}' \
         .format(device_name, self.get_found_chromecasts(), ', '.join(self._spotify_devices.keys())), level='WARNING')
@@ -391,7 +392,7 @@ class SpotifyClient(hass.Hass):
     return True
 
 
-  def _log_action_from_uri(self, uri, device):
+  def _log_playback_action(self, uri, device):
     """ 
     Log Spotify action based on uri and device - For debugging purposes 
     
@@ -452,19 +453,15 @@ class SpotifyClient(hass.Hass):
 
   ######################   PLAY SPOTIFY MUSIC METHODS END   ########################
 
+
   ######################   UTILITY SPOTIFY METHODS   ########################
-
-  @property
-  def is_active(self):
-    """ Returns if spotify is currently connected to a device """
-    return self.sp.current_playback() is not None
-
 
   def _spotify_controls_event_callback(self, event_name, data, kwargs):
     """
     Callback for controlling the active Spotify device from HA or AD
 
     Actions: pause, stop, resume, skip, previous track, set volume (need extra volume_level parameter), increment/decrement volume, mute
+    snapshot, restore
     """
     action = data.get('action', None)
     if not action:
@@ -506,6 +503,18 @@ class SpotifyClient(hass.Hass):
     elif action == 'mute':
       self.log('Spotify device was muted.', level=self.DEBUG_LEVEL)
       self.set_volume(0)
+    elif action == 'snapshot':
+      self.log('Taking a snapshot of the current playback.', level=self.DEBUG_LEVEL)
+      self.take_playback_snapshot()
+    elif action == 'restore':
+      self.log('Resuming playback from the previous snapshot.', level=self.DEBUG_LEVEL)
+      self.restore_playback_from_snapshot()
+
+
+  @property
+  def is_active(self):
+    """ Returns if spotify is currently connected to a device """
+    return self.sp.current_playback() is not None
 
 
   def repeat(self, state, device=None):
@@ -579,7 +588,10 @@ class SpotifyClient(hass.Hass):
   @property
   def current_volume(self):
     """ Returns the current active device volume level in percent """
-    return self.sp.current_playback().get('device', {}).get('volume_percent', None)
+    if self.is_active:
+      return self.sp.current_playback().get('device', {}).get('volume_percent', None)
+    else:
+      return 0
 
 
   def set_volume(self, volume):
@@ -609,6 +621,62 @@ class SpotifyClient(hass.Hass):
       self.sp.seek_track(position_ms, device_id)
 
   ######################   UTILITY SPOTIFY METHODS END   ########################
+
+
+  ######################   PLAYBACK SNAPSHOT METHODS   ########################
+
+  """
+  Caveat: The snapshot does not currently take into account a list of tracks playing - only a single track will be resumed
+  """
+
+  def take_playback_snapshot(self):
+    """ 
+    Take snapshot to allow us to resume later with this information
+    This currently pauses playback - remove this and allow user to decide the next action?
+    """
+    # Reset previous snapshot info
+    self._snapshot_info = {}
+
+    if not self.is_active: # Nothing is currently playing
+      self.logger.log('Nothing is currently playling', level='INFO')
+      return
+
+    result = self.sp.current_playback()
+    self._snapshot_info['device_id'] = result['device']['id']
+    self._snapshot_info['device_name'] = result['device']['name']
+    self._snapshot_info['shuffle_state'] = result['shuffle_state']
+    self._snapshot_info['repeat_state'] = result['repeat_state']
+    self._snapshot_info['currently_playing_type'] = result['currently_playing_type']
+    self._snapshot_info['currently_playing_uri'] = result.get('item', {}).get('uri', 'Could not find uri')
+    if result['context']:
+      self._snapshot_info['context'] = result.get('context', {}).get('uri', False)
+    self._snapshot_info['progress_ms'] = result['progress_ms']
+
+    self.pause()
+
+  
+  def restore_playback_from_snapshot(self):
+    """ 
+    Resume playback with the info from the previous snapshot
+    """
+    if not self._snapshot_info:
+      self.log('Cannot restore playback since the previous snapshot did not capture anything.', level='WARNING')
+      return
+
+    if self._snapshot_info.get('context', False): # An playlist, album, artist was previously playing
+      uri = self._snapshot_info['context']
+      offset = self._snapshot_info['currently_playing_uri']
+    else:
+      uri = self._snapshot_info['currently_playing_uri']
+      offset = None
+
+    # Resume playing at the track we left off at
+    self.spotify_play(self._snapshot_info['device_name'], uri, offset)
+
+    # Skip to the last position in the previously playing track
+    self.seek_track(self._snapshot_info['progress_ms'])
+
+  ######################   PLAYBACK SNAPSHOT METHODS END   ########################
 
 
   ######################   MUSIC RECOMMENDATION METHODS   ########################
@@ -1112,7 +1180,8 @@ class SpotifyClient(hass.Hass):
       self.log('Please specifiy a number for number_tracks.')
       num_tracks = 0
 
-    to_play = self._get_media_from_uri(data)
+    if not similar:
+      to_play = self._get_media_from_uri(data)
     if not to_play:
       # No URI has been passed in, make a recommendation
       to_play = self._get_recommendation(data)
@@ -1152,13 +1221,8 @@ class SpotifyClient(hass.Hass):
     album = d.get('album', None)
     artist = d.get('artist', None)
 
-    multiple = True if d.get('multiple', False) else False            # Play multiple tracks if defined
-    similar = True if d.get('similar', False) else False              # Find recommendations that are similar to the input but not the same
+    multiple = True if d.get('multiple', False) else False
     random_search = True if d.get('random_search', False) else False
-
-    # If the user is looking for something similar, do not play the uri
-    if similar: 
-      return ''
 
     to_play = None
 
