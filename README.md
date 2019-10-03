@@ -152,16 +152,16 @@ Take a snapshot of the currently playing music on Spotify
 Restore the previously taken snapshot   
 ```self.fire_event('spotify.controls', action='restore')```
 
-Restore the previously taken snapshot to the office speaker
+Restore the previously taken snapshot to the office speaker  
 ```self.fire_event('spotify.controls', action='restore', device='office')```
 
-Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
+Play a track from a Spotify track uri and play multiple songs that are similar afterwards   
 ```self.fire_event('spotify.controls', volume_level='25')```
 
-Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
+Play a track from a Spotify track uri and play multiple songs that are similar afterwards   
 ```self.fire_event('spotify.controls', action='increase_volume')```
 
-Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
+Play a track from a Spotify track uri and play multiple songs that are similar afterwards   
 ```self.fire_event('spotify.controls', action='pause')```
 
 ## Contributors
