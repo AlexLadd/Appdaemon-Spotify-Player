@@ -146,7 +146,7 @@ Play the album the 'The Wall' with shuffle turned on
 ### Examples (for Appdaemon)
 **Note**: These can all be played from Home Assistant by firing the controls event with the added parameters
 
-Take a snapshot of the currently playing music on Spotify 
+Take a snapshot of the currently playing music on Spotify   
 ```self.fire_event('spotify.controls', action='snapshot')```
 
 Restore the previously taken snapshot   
