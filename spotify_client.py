@@ -460,12 +460,9 @@ class SpotifyClient(hass.Hass):
     """
     Callback for controlling the active Spotify device from HA or AD
 
-    Actions: pause, stop, resume, skip, previous track, set volume (need extra volume_level parameter), increment/decrement volume, mute
-    snapshot, restore
+    Actions: pause, stop, resume, next, previous, set_volume (need extra volume_level parameter), increase_volume, decrease_volume, mute, snapshot, restore
     """
     action = data.get('action', None)
-    if not action:
-      return
 
     if action == 'pause':
       self.log('Spotify device paused.', level=self.DEBUG_LEVEL)
@@ -482,16 +479,6 @@ class SpotifyClient(hass.Hass):
     elif action in ['previous', 'previous_track']:
       self.log('Spotify device skipped to previous track.', level=self.DEBUG_LEVEL)
       self.previous_track()
-    elif action in ['adjust_volume', 'set_volume']:
-      volume_level = data.get('volume_level', None) or data.get('volume', None)
-      if volume_level:
-        try:
-          self.set_volume(int(volume_level))
-          self.log('Set Spotify device volume to "{}" percent.'.format(volume_level), level=self.DEBUG_LEVEL)
-        except ValueError:
-          self.log('Please specify a volume_level between 1 and 100 to set the Spotify device volume.', level='WARNING')
-      else:
-        self.log('Please specify the volume_level parameter to set the Spotify device volume.', level='WARNING')
     elif action == 'decrease_volume':
       self.log('Reduced Spotify device volume.', level=self.DEBUG_LEVEL)
       current_volume = self.current_volume
@@ -508,7 +495,17 @@ class SpotifyClient(hass.Hass):
       self.take_playback_snapshot()
     elif action == 'restore':
       self.log('Resuming playback from the previous snapshot.', level=self.DEBUG_LEVEL)
-      self.restore_playback_from_snapshot()
+      device = data.get('device', None)
+      self.restore_playback_from_snapshot(device)
+
+    if 'volume_level' in data:
+      volume_level = data.get('volume_level', None)
+      if volume_level:
+        try:
+          self.set_volume(int(volume_level))
+          self.log('Set the current Spotify device volume to "{}" percent.'.format(volume_level), level=self.DEBUG_LEVEL)
+        except ValueError:
+          self.log('Please specify a volume_level between 1 and 100 to set the Spotify device volume.', level='WARNING')
 
 
   @property
@@ -655,9 +652,11 @@ class SpotifyClient(hass.Hass):
     self.pause()
 
   
-  def restore_playback_from_snapshot(self):
+  def restore_playback_from_snapshot(self, device=None):
     """ 
     Resume playback with the info from the previous snapshot
+
+    param device: Spotify device name to optionally restore the playback on
     """
     if not self._snapshot_info:
       self.log('Cannot restore playback since the previous snapshot did not capture anything.', level='WARNING')
@@ -670,8 +669,10 @@ class SpotifyClient(hass.Hass):
       uri = self._snapshot_info['currently_playing_uri']
       offset = None
 
+    dev = device if device else self._snapshot_info['device_name']
+
     # Resume playing at the track we left off at
-    self.spotify_play(self._snapshot_info['device_name'], uri, offset)
+    self.spotify_play(dev, uri, offset)
 
     # Skip to the last position in the previously playing track
     self.seek_track(self._snapshot_info['progress_ms'])

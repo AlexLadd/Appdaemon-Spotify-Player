@@ -59,7 +59,7 @@ spotify_client:
 
 ## Usage
 
-### Event Parameters:
+### Play Event Parameters ('spotify.play'):
 
 #### Required:
 * **Event name**: The event_domain_name specified in the app config followed by '.play' (Default: 'spotify.play')
@@ -78,11 +78,11 @@ parameter to be used simply remove it from the event call.
 * **genre**: Genre of music to find a recommendation for
 * **category**: Category of music to find a recommendation for 
 * **featured**: Play a playlist from Spotify featured playlists
-* **new_releases**: Play a playlist from Spotify newly releases Spotify albums
+* **new_releases**: Play an album from newly released Spotify albums
 * **similar**: Find music similar to the input parameters but not the same
 
 * **random_start**: Start at a random position in the playlist, album or list of tracks
-* **random_search**: Randomize the search results (randomly choose albums from artist, randomly choose 1 track from many, randomly choose a user playlist, etc)
+* **random_search**: Randomize the search results
 * **shuffle**: Set Spotify shuffle state to 'on'
 * **repeat**: Set repeat to one of 'track', 'context', 'off'
 * **single**: If specified only a single track will play regardless of which other options have been chosen (takes priority over multiple)
@@ -90,7 +90,7 @@ parameter to be used simply remove it from the event call.
 * **tracks**: The desired number of tracks to be played, this is not a guarantee (multiple & single take priority)
 
 ### Examples (for Appdaemon)
-**Note**: These can all be played from Home Assistant by firing an event called 'spotify.play' with the added parameters
+**Note**: These can all be played from Home Assistant by firing the play event with the added parameters
 
 Play a playlist from a Spotify uri and randomize the starting position  
 ```self.fire_event('spotify.play', device='office', playlist='spotify:playlist:37i9dQZF1DWXRqgorJj26U', random_start=True)```
@@ -119,6 +119,47 @@ Play an album similar to 'The Wall' but not the same
 Play the album the 'The Wall' with shuffle turned on  
 ```self.fire_event('spotify.play', device='office', album='The Wall', shuffle=True)```
 
+
+### Controls Event Parameters ('spotify.controls'):
+
+**Event name**: If event_domain_name is specified, the event name will be event_domain_name + '.controls' (Default: 'spotify.controls')
+
+* **volume_level**: The percent volume level to set the current Spotify device to
+* **action**: The desired action
+  * **pause**: Pause the current device playback
+  * **resume**: Resume the current device playback
+  * **stop**: Stop the current device playback (Same as result pause)
+  * **next**: Skip to the next track
+  * **previous**: Skip to the previous track
+  * **increase_volume**: Increase the current device volume level by 5 percent
+  * **decrease_volume**: Decrease the current device volume level by 5 percent
+  * **mute**: Mute the current device volume
+  * **snapshot**: Take a snapshot of what is currently playing on Spotify
+  * **restore**: Restore music from a previously taken snapshot (optionally specify the device to restore the music on)
+* **device** (Optional): The device to restore the music on when using action='restore' (default will play on the device the snapshot was taken from)
+
+**Note**: Snapshot does not currently take into account a list of tracks playing, only a single track will be restored
+
+#### Examples (for Appdaemon)
+**Note**: These can all be played from Home Assistant by firing the controls event with the added parameters
+
+Take a snapshot of the currently playing music on Spotify 
+```self.fire_event('spotify.controls', action='snapshot')```
+
+Restore the previously taken snapshot   
+```self.fire_event('spotify.controls', action='restore')```
+
+Restore the previously taken snapshot to the office speaker
+```self.fire_event('spotify.controls', action='restore', device='office')```
+
+Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
+```self.fire_event('spotify.controls', volume_level='25')```
+
+Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
+```self.fire_event('spotify.controls', action='increase_volume')```
+
+Play a track from a Spotify track uri and play multiple songs that are similar afterwards  
+```self.fire_event('spotify.controls', action='pause')```
 
 ## Contributors
 * [Daniel Lashua](http://github.com/dlashua)
