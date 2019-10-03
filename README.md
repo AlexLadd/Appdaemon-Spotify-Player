@@ -6,6 +6,7 @@ Easily play music on a Spotify connected device from artists, albums, tracks, an
 favourite music without the need to know the Spotify uri. All with a single event!
 
 
+
 ## Installation/Configuration Instructions
 
 ### Installation:
@@ -61,8 +62,9 @@ spotify_client:
 
 ### Play Event Parameters ('spotify.play'):
 
+**Event name**: If event_domain_name is specified, the event name will be event_domain_name + '.play' (Default: 'spotify.play')
+
 #### Required:
-* **Event name**: The event_domain_name specified in the app config followed by '.play' (Default: 'spotify.play')
 * **device**: Spotify connected device name (aliases may be used if you have defined device_aliases in the app config)
 
 #### Optional:
@@ -120,6 +122,7 @@ Play the album the 'The Wall' with shuffle turned on
 ```self.fire_event('spotify.play', device='office', album='The Wall', shuffle=True)```
 
 
+
 ### Controls Event Parameters ('spotify.controls'):
 
 **Event name**: If event_domain_name is specified, the event name will be event_domain_name + '.controls' (Default: 'spotify.controls')
@@ -136,11 +139,11 @@ Play the album the 'The Wall' with shuffle turned on
   * **mute**: Mute the current device volume
   * **snapshot**: Take a snapshot of what is currently playing on Spotify
   * **restore**: Restore music from a previously taken snapshot (optionally specify the device to restore the music on)
-* **device** (Optional): The device to restore the music on when using action='restore' (default will play on the device the snapshot was taken from)
+* **device** (Optional): The device to restore the music on when using action='restore' (default will restore to the device the snapshot was taken from)
 
 **Note**: Snapshot does not currently take into account a list of tracks playing, only a single track will be restored
 
-#### Examples (for Appdaemon)
+### Examples (for Appdaemon)
 **Note**: These can all be played from Home Assistant by firing the controls event with the added parameters
 
 Take a snapshot of the currently playing music on Spotify 
