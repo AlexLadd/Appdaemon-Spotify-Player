@@ -67,7 +67,7 @@ spotify_client:
 
 #### Optional:
 **Warning**: If any of the optional parameters are specified they will be considered 'on' or 'True'. If you do not want a
-parameter to be used simply remove it from the event.
+parameter to be used simply remove it from the event call.
 
 * **track**: Spotify track uri or song name
 * **album**: Spotify album uri or album name
