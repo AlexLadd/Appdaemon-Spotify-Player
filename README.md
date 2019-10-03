@@ -1,6 +1,6 @@
 # Appdaemon Spotify Player
 
-### Appdaemon app to play Spotify songs on a Spotify connected device from Home Assistant or Appdaemon.
+### Appdaemon app that plays Spotify songs on a Spotify connected device from Home Assistant or Appdaemon.
 
 Easily play music on a Spotify connected device from artists, albums, tracks, and playlists or get recommendations from your 
 favourite music without the need to know the Spotify uri. All with a single event!
