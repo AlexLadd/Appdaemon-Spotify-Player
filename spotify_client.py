@@ -464,7 +464,7 @@ class SpotifyClient(hass.Hass):
     """
     Callback for controlling the active Spotify device from HA or AD
 
-    Actions: pause, stop, resume, skip, previous track, set volume (need extra volume_level parameter), increment/decrement volume
+    Actions: pause, stop, resume, skip, previous track, set volume (need extra volume_level parameter), increment/decrement volume, mute
     """
     action = data.get('action', None)
     if not action:
@@ -488,8 +488,13 @@ class SpotifyClient(hass.Hass):
     elif action in ['adjust_volume', 'set_volume']:
       volume_level = data.get('volume_level', None) or data.get('volume', None)
       if volume_level:
-        self.log('Set Spotify device volume.', level=self.DEBUG_LEVEL)
-        self.set_volume(volume_level)
+        try:
+          self.set_volume(int(volume_level))
+          self.log('Set Spotify device volume to "{}" percent.'.format(volume_level), level=self.DEBUG_LEVEL)
+        except ValueError:
+          self.log('Please specify a volume_level between 1 and 100 to set the Spotify device volume.', level='WARNING')
+      else:
+        self.log('Please specify the volume_level parameter to set the Spotify device volume.', level='WARNING')
     elif action == 'decrease_volume':
       self.log('Reduced Spotify device volume.', level=self.DEBUG_LEVEL)
       current_volume = self.current_volume
@@ -498,6 +503,9 @@ class SpotifyClient(hass.Hass):
       self.log('Increased Spotify device volume.', level=self.DEBUG_LEVEL)
       current_volume = self.current_volume
       self.set_volume(current_volume + 5)
+    elif action == 'mute':
+      self.log('Spotify device was muted.', level=self.DEBUG_LEVEL)
+      self.set_volume(0)
 
 
   def repeat(self, state, device=None):
