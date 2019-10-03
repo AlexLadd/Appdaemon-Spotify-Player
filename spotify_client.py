@@ -682,63 +682,7 @@ class SpotifyClient(hass.Hass):
 
   ######################   MUSIC RECOMMENDATION METHODS   ########################
 
-  def get_random_track_from_user_playlist(self, user='steph', playlist_name="Stephanie' s songs"):
-    """ 
-    Return a random track from stephs chosen playlist as a string
-
-    param user: Spotify username
-    param playlist_name: Displayed playlist name 
-      -> may need to take special characters into consideration (ex: may need space after apostrophe's)
-    """
-    playlist = self.get_playlists(user, include=playlist_name)
-    if playlist:
-      pl_info = self.get_playlist_info(playlist[0])
-      if pl_info and 'tracks' in pl_info:
-        return random.choice(pl_info['tracks'])
-    return ''
-
-
-  def get_recommended_track(self, artist=None, genre=None, track=None, random_song=False, random_artist=False):
-    """
-    Return a recommended track based on input variables
-    """
-    track_uri = ''
-    if not any([artist, track, genre]):
-      pl = self.get_playlists()
-      if pl:
-        tracks = self.get_playlist_info(random.choice(pl))['tracks']
-        if tracks:
-          track_uri = random.choice(tracks)
-
-      if not track_uri:
-        pl = self.get_featured_playlists()
-        if pl:
-          tracks = self.get_playlist_info(random.choice(pl))['tracks']
-          if tracks:
-            track_uri = random.choice(tracks)
-
-    if not track_uri:
-      if artist:
-        if random_artist:
-          track_uris = self.get_recommendations(artists=artist, genres=genre, tracks=track)
-        else:
-          track_uris = self.get_top_tracks(artist=artist)
-      else:
-        track_uris = self.get_recommendations(artists=artist, genres=genre, tracks=track)
-
-      if track_uris:
-        if random_song:
-          track_uri = random.choice(track_uris)
-        else:
-          track_uri = track_uris[0]
-
-    if not track_uri:
-      return ''
-
-    return track_uri
-
-
-  def get_recommendations(self, artists=None, genres=None, tracks=None, limit=10):
+  def get_spotify_recommendation(self, artists=None, genres=None, tracks=None, limit=10):
     """
     Returns recommended tracks as a list
     This method will recommend tracks from various artists
@@ -763,13 +707,13 @@ class SpotifyClient(hass.Hass):
         artists = self.get_artist_info(artists)['uri']
       artists = [artists]
 
-    results = self.sp.recommendations(seed_artists=artists, seed_genres=genres, seed_tracks=tracks, limit=limit)
+    results = self.sp.recommendations(seed_artists=artists, seed_genres=genres, seed_tracks=tracks, limit=limit, min_popularity=50)
     return [u['uri'] for u in results['tracks']]
 
 
   def get_recommendation_genre_seeds(self):
     """
-    Returns the available genres for the get_recommendations() functions as a list of genres
+    Returns the available genres for the get_spotify_recommendation() functions as a list of genres
     """
     return self.sp.recommendation_genre_seeds()['genres']
 
@@ -848,13 +792,13 @@ class SpotifyClient(hass.Hass):
     return [u['uri'] for u in res['playlists']['items']]
 
 
-  def get_artist_tracks(self, artist, limit=10, similar=False, random_search=False):
+  def get_artist_tracks(self, artist, limit=10, similar_artists=False, random_search=False):
     """
-    Return artist or similar artist tracks as a list of uri's
+    Return artist tracks as a list of uri's
 
     param artist: Name of the artist or Spotify artist uri
     param limit: Limit of tracks to find
-    param similar: Find tracks from similar artists
+    param similar_artists: Find tracks from similar artists
     param random_search: Randomize the search results
     """
     if not self.is_artist_uri(artist):
@@ -862,24 +806,26 @@ class SpotifyClient(hass.Hass):
     else:
       search_artist = artist
 
+    if not search_artist:
+      return []
+
     res = []
-    if not similar:
+    if not similar_artists:
       # Find tracks from given artists albums
-      artist_albums = self.get_artist_albums(search_artist)
-      if artist_albums:
-        if random_search:
-          random.shuffle(artist_albums)
-        for album in artist_albums:
-          if len(res) >= limit:
-            break
-          tracks = self.get_album_tracks(album)
-          if tracks:
-            for t in tracks:
-              if len(res) < limit:
-                res.append(t)
-              else:
-                break
-    else:
+      tracks = self.get_top_tracks(search_artist)
+      if tracks:
+        res = tracks
+      if len(res) < limit:
+        artist_albums = self.get_artist_albums(search_artist)
+        if artist_albums:
+          if random_search:
+            random.shuffle(artist_albums)
+          for album in artist_albums:
+            if len(res) >= limit:
+              break
+            tracks = self.get_album_tracks(album)
+            res += tracks
+    if not res:
       # Find tracks from similar artists
       if len(res) < limit:
         related_artists = self.get_related_artists(search_artist)
@@ -891,12 +837,13 @@ class SpotifyClient(hass.Hass):
               break
             tracks = self.get_top_tracks(artist)
             if tracks:
-              for t in tracks:
-                if len(res) < limit:
-                  res.append(t)
-                else:
-                  break
-    return res
+              res += tracks
+
+    if len(res) < limit:
+      res += self.get_spotify_recommendation(artists=search_artist, limit=limit)
+    if random_search:
+      random.shuffle(res)
+    return res[:limit]
 
   ######################   MUSIC RECOMMENDATION METHODS END   ########################
 
@@ -1181,23 +1128,24 @@ class SpotifyClient(hass.Hass):
       self.log('Please specifiy a number for "tracks".')
       num_tracks = 0
 
+    to_play = None
     if not similar:
       to_play = self._get_media_from_uri(data)
     if not to_play:
       # No URI has been passed in, make a recommendation
-      to_play = self._get_recommendation(data)
+      to_play = self.get_recommendation(data)
 
     if to_play:
       offset = None
       if single:
         self.log('A single song will play.', level=self.DEBUG_LEVEL)
-        to_play = self._get_single_track(to_play, random_search)
+        to_play = self.get_single_track(to_play, random_search)
       elif multiple:
         self.log('Multiple songs will play.', level=self.DEBUG_LEVEL)
-        to_play = self._get_multiple_tracks(to_play)
+        to_play = self.get_multiple_tracks(to_play)
       elif num_tracks > 0: # User specified a specific number of tracks they would like to hear
         self.log('"{}" tracks have been requested to play.'.format(num_tracks), level=self.DEBUG_LEVEL)
-        to_play = self._get_number_of_tracks(to_play, num_tracks, similar, random_search)
+        to_play = self.get_number_of_tracks(to_play, num_tracks, similar, random_search)
       if random_start:
         self.log('Random start is turned on.', level=self.DEBUG_LEVEL)
         offset = self._get_random_offset(to_play)
@@ -1259,13 +1207,13 @@ class SpotifyClient(hass.Hass):
     return to_play
 
 
-  def _get_recommendation(self, data):
+  def get_recommendation(self, data):
     """
     Returns a Spotify recommendation based on user input data
     Priority order: user defined playlist -> track defined -> album defined -> artist defined -> genre -> category -> 
       -> featured playlist -> newly released album -> users playlist (nothing defined - fallback)
 
-    param data: The data from the spotify.play event call
+    param data: The data to build the recommendation from
     """
     d = data
 
@@ -1284,7 +1232,7 @@ class SpotifyClient(hass.Hass):
     multiple = True if d.get('multiple', False) else False            # Play multiple tracks if defined
     similar = True if d.get('similar', False) else False              # Find recommendations that are similar to the input but not the same
 
-    to_play = None
+    to_play = []
 
     # Use the user defined playlist parameter to find music
     if playlist:
@@ -1302,8 +1250,8 @@ class SpotifyClient(hass.Hass):
         self.log('Attempting to use the track name to find the song.', level=self.DEBUG_LEVEL)
         to_play = self.get_track_info(track, artist).get('uri', None)
       if not to_play:
-        self.log('Attempting to use the track name to make a similar track recommendation.', level=self.DEBUG_LEVEL)
-        to_play = self.get_recommended_track(tracks=track, genre=genre, artists=artist, random_song=random_search)
+        self.log('Attempting to use the track name to make a similar track recommendations.', level=self.DEBUG_LEVEL)
+        to_play = self.get_spotify_recommendation(tracks=track, genres=genre, artists=artist)
 
     # Use the user defined album parameter to find music
     if not to_play and album:
@@ -1315,6 +1263,7 @@ class SpotifyClient(hass.Hass):
         album_info = self.get_album_info(album, artist)
         album_artist = album_info.get('artist_uri', None)
         album_uri = album_info.get('uri', None)
+
         if album_artist:
           chosen_artist = album_artist
           if random.choice([1,2]) == 1: # Randomly pick a related artist
@@ -1361,20 +1310,21 @@ class SpotifyClient(hass.Hass):
             to_play = artist_albums[0]
 
       if not to_play:
-        to_play = self.get_recommended_track(artist=artist, genre=genre, random_song=random_search)
+        to_play = self.get_spotify_recommendation(artists=artist, genres=genre, tracks=track)
 
     # Use the user defined genre parameter to find music
     if not to_play and genre:
       self.log('Attempting to use the genre name to make a recommendation.', level=self.DEBUG_LEVEL)
-      if genre in self.get_categories(limit=50):
+      if genre in self.get_recommendation_genre_seeds():
+        to_play = self.get_spotify_recommendation(artists=artist, genres=genre, tracks=track)
+      if not to_play:
         to_play = self.get_playlists_by_category(category)
         if to_play:
           if random_search:
             to_play = random.choice(to_play)
           else:
             to_play = to_play[0]
-      elif genre in self.get_recommendation_genre_seeds():
-        to_play = self.get_recommendations(artists=artist, genres=genre, tracks=track)
+      
 
     # Use the user defined category parameter to find music
     if not to_play and category:
@@ -1386,7 +1336,7 @@ class SpotifyClient(hass.Hass):
         else:
           to_play = to_play[0]
       if not to_play:
-        to_play = self.get_recommendations(genres=category)
+        to_play = self.get_spotify_recommendation(genres=category)
 
     # Use the user defined featured parameter to find music
     if not to_play and featured:
@@ -1427,19 +1377,19 @@ class SpotifyClient(hass.Hass):
     return to_play
 
 
-  def _get_multiple_tracks(self, uri):
+  def get_multiple_tracks(self, uri):
     """
-    Returns a list of recommended tracks if the uri is a track
+    Ensures the return uri will contain a Spotify uri or list of uri's that will play multiple songs
 
     param uri: A valid Spotify uri or list of uri's
     """
     if isinstance(uri, str) and self.is_track_uri(uri):
-      tracks = self.get_recommendations(tracks=uri)
+      tracks = self.get_spotify_recommendation(tracks=uri)
       return [uri] + tracks
     return uri
 
 
-  def _get_number_of_tracks(self, uri, num_tracks, similar=False, random_search=False):
+  def get_number_of_tracks(self, uri, num_tracks, similar=False, random_search=False):
     """
     Returns a list of tracks that is the specified length using the uri for recommendations
     The return number of tracks is not a guarantee
@@ -1451,6 +1401,7 @@ class SpotifyClient(hass.Hass):
     """
     res = []
 
+    # Add the provided uri(s) to the start of our result
     if isinstance(uri, list):
       res = uri
       if random_search:
@@ -1469,22 +1420,19 @@ class SpotifyClient(hass.Hass):
         res += album_tracks
       # If uri is an artist uri, we will get tracks later
 
-    if len(res) > num_tracks:
-      return random.sample(res, num_tracks)
-    elif len(res) == num_tracks:
-      return res
+    if len(res) >= num_tracks:
+      if random_search:
+        return random.sample(res, num_tracks)
+      return res[:num_tracks]
 
     # Determine the artist of the given uri
     search_artist = None
     if self.is_playlist_uri(search_uri):
       tracks = self.get_playlist_info(search_uri)['tracks']
       if tracks:
-        if random_search:
-          t = random.choice(tracks)
-        else:
-          t = tracks[0]
-        search_artist = self.get_artist_info(t).get('uri', None)
-    else:
+        track = random.choice(tracks)
+        search_artist = self.get_artist_info(track).get('uri', None)
+    if not search_artist:
       search_artist = self.get_artist_info(search_uri).get('uri', None)
 
     # Add artist albums tracks until we reach our desired number of tracks
@@ -1495,15 +1443,15 @@ class SpotifyClient(hass.Hass):
         tracks = self.get_artist_tracks(search_artist, num_tracks-len(res), not similar, random_search)
         res += tracks
       if len(res) < num_tracks:
-        tracks = self.get_recommendations(artists=search_artist, limit=num_tracks-len(res))
+        tracks = self.get_spotify_recommendation(artists=search_artist, limit=num_tracks-len(res))
         res += tracks
 
     return res
 
 
-  def _get_single_track(self, uri, random_track=False):
+  def get_single_track(self, uri, random_track=False):
     """ 
-    Returns a single track regardless of the Spotify media type (playlist, artist, album, track) 
+    Extracts a single track uri from the provided uri
     
     param uri: A valid Spotify uri
     param random_track: Choose a random track or not
