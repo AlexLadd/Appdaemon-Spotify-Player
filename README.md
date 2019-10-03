@@ -6,14 +6,14 @@ Easily play music on a Spotify connected device from artists, albums, tracks, an
 favourite music without the need to know the Spotify uri. All with a single event!
 
 
-## Installation/Configuration Instructions:
+## Installation/Configuration Instructions
 
 ### Installation:
 
 Copy the contents of [spotify_client.py](https://github.com/AlexLadd/Appdaemon-Spotify-Player/blob/master/spotify_client.py) to
 your Appdaemon apps folder. For Appdaemon installation follow the instructions [here](https://appdaemon.readthedocs.io/en/latest/INSTALL.html). 
 
-### App Configuration
+### App Configuration:
 
 ```yaml
 # Example apps.yaml entry
@@ -57,7 +57,7 @@ spotify_client:
 ```
 
 
-## Usage:
+## Usage
 
 ### Event Parameters:
 

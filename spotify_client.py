@@ -27,6 +27,8 @@ CONF_EVENT_DOMAIN_NAME = 'event_domain_name'
 
 DEFAULT_EVENT_DOMAIN_NAME = 'spotify'
 DEFAULT_EVENT_PLAY = '.play'
+DEFAULT_EVENT_CONTROLS = '.controls'
+
 DEFAULT_COUNTRY = 'CA'
 DEFAULT_LANGUAGE = 'en_CA'
 
@@ -73,7 +75,8 @@ class SpotifyClient(hass.Hass):
   def initialize(self):
     config = SPOTIFY_CLIENT_SCHEMA(self.args)
     self._event_domain_name = config.get(CONF_EVENT_DOMAIN_NAME)
-    self._event_name = self._event_domain_name + DEFAULT_EVENT_PLAY
+    self._event_play = self._event_domain_name + DEFAULT_EVENT_PLAY
+    self._event_controls = self._event_domain_name + DEFAULT_EVENT_CONTROLS
     self._debugging = config.get(CONF_DEBUGGING)
     self._username = config.get(CONF_USERNAME)
     self._password = config.get(CONF_PASSWORD)
@@ -93,8 +96,8 @@ class SpotifyClient(hass.Hass):
     else:
       self.DEBUG_LEVEL = 'DEBUG'
 
-    if self._event_name != DEFAULT_EVENT_NAME:
-      self.log('Spotify play event name has been changed to a custom event name: "{}"'.format(self._event_name), level=self.DEBUG_LEVEL)
+    if self._event_play != DEFAULT_EVENT_NAME:
+      self.log('Spotify play event name has been changed to a custom event name: "{}"'.format(self._event_play), level=self.DEBUG_LEVEL)
 
     self.sp = None                    # Spotify client object
     self._access_token = None         # Spotify access token
@@ -105,7 +108,10 @@ class SpotifyClient(hass.Hass):
     self._play_retry_count = 0        # Current number of song replay tries
 
     # Register the Spotify play event listener
-    self.handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_name)
+    self.handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_play)
+
+    # Register the Spotify play event listener
+    self.handle_spotify_play = self.listen_event(self._spotify_controls_event_callback, event=self._event_controls)
 
     # Spotify web token is valid for 3600 seconds, so renew before 1 hour expires
     self.run_every(self._renew_spotify_token, self.datetime() + datetime.timedelta(seconds=2), 3500)
@@ -454,6 +460,46 @@ class SpotifyClient(hass.Hass):
     return self.sp.current_playback() is not None
 
 
+  def _spotify_controls_event_callback(self, event_name, data, kwargs):
+    """
+    Callback for controlling the active Spotify device from HA or AD
+
+    Actions: pause, stop, resume, skip, previous track, set volume (need extra volume_level parameter), increment/decrement volume
+    """
+    action = data.get('action', None)
+    if not action:
+      return
+
+    if action == 'pause':
+      self.log('Spotify device paused.', level=self.DEBUG_LEVEL)
+      self.pause()
+    elif action == 'resume':
+      self.log('Spotify device resumed.', level=self.DEBUG_LEVEL)
+      self.resume()
+    elif action == 'stop':
+      self.log('Spotify device stopped.', level=self.DEBUG_LEVEL)
+      self.pause()
+    elif action in ['skip', 'next', 'next_track']:
+      self.log('Spotify device skipped track.', level=self.DEBUG_LEVEL)
+      self.next_track()
+    elif action in ['previous', 'previous_track']:
+      self.log('Spotify device skipped to previous track.', level=self.DEBUG_LEVEL)
+      self.previous_track()
+    elif action in ['adjust_volume', 'set_volume']:
+      volume_level = data.get('volume_level', None) or data.get('volume', None)
+      if volume_level:
+        self.log('Set Spotify device volume.', level=self.DEBUG_LEVEL)
+        self.set_volume(volume_level)
+    elif action == 'decrease_volume':
+      self.log('Reduced Spotify device volume.', level=self.DEBUG_LEVEL)
+      current_volume = self.current_volume
+      self.set_volume(current_volume - 5)
+    elif action == 'increase_volume':
+      self.log('Increased Spotify device volume.', level=self.DEBUG_LEVEL)
+      current_volume = self.current_volume
+      self.set_volume(current_volume + 5)
+
+
   def repeat(self, state, device=None):
     """
     Sets the Spotify device's repeat state
@@ -500,22 +546,32 @@ class SpotifyClient(hass.Hass):
 
   def next_track(self):
     """ Skip to the next track """
-    self.sp.next_track()
+    if self.is_active:
+      self.sp.next_track()
 
 
   def previous_track(self):
     """ Skip to previous track """
-    self.sp.previous_track()
+    if self.is_active:
+      self.sp.previous_track()
 
 
   def pause(self):
     """ Pause the playback """
-    self.sp.pause_playback()
+    if self.is_active:
+      self.sp.pause_playback()
 
 
   def resume(self):
     """ Resume the playback """
-    self.sp.start_playback()
+    if self.is_active:
+      self.sp.start_playback()
+
+
+  @property
+  def current_volume(self):
+    """ Returns the current active device volume level in percent """
+    return self.sp.current_playback().get('device', {}).get('volume_percent', None)
 
 
   def set_volume(self, volume):
@@ -524,7 +580,10 @@ class SpotifyClient(hass.Hass):
     
     param volume: Desired volume level (0 - 1)
     """
-    self.sp.volume(int(volume*100))
+    if self.is_active:
+      if 1 < volume < 100:
+        volume = volume / 100
+      self.sp.volume(int(volume*100))
 
 
   def seek_track(self, position_ms, device=None):
@@ -535,10 +594,11 @@ class SpotifyClient(hass.Hass):
     param device: Spotify device id (or name if the spotify_play method has cached the device)
       -> None will set seek position in the current device
     """
-    device_id = self.map_chromecasts(device)
-    if device_id in self._spotify_devices:
-      device_id = self._spotify_devices[device_id]
-    self.sp.seek_track(position_ms, device_id)
+    if self.is_active:
+      device_id = self.map_chromecasts(device)
+      if device_id in self._spotify_devices:
+        device_id = self._spotify_devices[device_id]
+      self.sp.seek_track(position_ms, device_id)
 
   ######################   UTILITY SPOTIFY METHODS END   ########################
 
@@ -680,14 +740,13 @@ class SpotifyClient(hass.Hass):
     return [i['id'] for i in result['categories']['items']]
 
 
-  def get_top_tracks(self, artist, country=None, limit=10):
+  def get_top_tracks(self, artist, country=None):
     """
-    Returns the top x top songs from an artist as a list
+    Returns the top 10 top songs from an artist as a list
     This method will recommend tracks from the specified artist
 
     param artist: Spotify artist uri or artist name
     param country: Valid ISO 3166-1 alpha-2 country code
-    param limit: Number of tracks to return (Max is 10 from spotify)
     """
     if not self.is_artist_uri(artist):
       artist = self.get_artist_info(artist).get('uri', None)
@@ -697,7 +756,7 @@ class SpotifyClient(hass.Hass):
       return []
 
     results = self.sp.artist_top_tracks(artist, country=(country or self._country))
-    return [u['uri'] for u in results['tracks'][:limit]]
+    return [u['uri'] for u in results['tracks']]
 
 
   def get_featured_playlists(self, country=None, locale=None, limit=10):
@@ -710,6 +769,57 @@ class SpotifyClient(hass.Hass):
     """
     res = self.sp.featured_playlists(locale=(locale or self._language), country=(country or self._country), timestamp=datetime.datetime.now().isoformat(), limit=limit)
     return [u['uri'] for u in res['playlists']['items']]
+
+
+  def get_artist_tracks(self, artist, limit=10, similar=False, random_search=False):
+    """
+    Return artist or similar artist tracks as a list of uri's
+
+    param artist: Name of the artist or Spotify artist uri
+    param limit: Limit of tracks to find
+    param similar: Find tracks from similar artists
+    param random_search: Randomize the search results
+    """
+    if not self.is_artist_uri(artist):
+      search_artist = self.get_artist_info(artist)['uri']
+    else:
+      search_artist = artist
+
+    res = []
+    if not similar:
+      # Find tracks from given artists albums
+      artist_albums = self.get_artist_albums(search_artist)
+      if artist_albums:
+        if random_search:
+          random.shuffle(artist_albums)
+        for album in artist_albums:
+          if len(res) >= limit:
+            break
+          tracks = self.get_album_tracks(album)
+          if tracks:
+            for t in tracks:
+              if len(res) < limit:
+                res.append(t)
+              else:
+                break
+    else:
+      # Find tracks from similar artists
+      if len(res) < limit:
+        related_artists = self.get_related_artists(search_artist)
+        if related_artists:
+          if random_search:
+            random.shuffle(related_artists)
+          for artist in related_artists:
+            if len(res) >= limit:
+              break
+            tracks = self.get_top_tracks(artist)
+            if tracks:
+              for t in tracks:
+                if len(res) < limit:
+                  res.append(t)
+                else:
+                  break
+    return res
 
   ######################   MUSIC RECOMMENDATION METHODS END   ########################
 
@@ -767,20 +877,6 @@ class SpotifyClient(hass.Hass):
     
     results = self.sp.artist_albums(artist, album_type=album_type, country=(country or self._country), limit=limit, offset=offset)
     return [a['uri'] for a in results['items']]
-
-
-  def get_artist_tracks(self, artist, limit=10):
-    """
-    Return a list of songs from given artist
-
-    param artist: name of the artist or spotify artist uri
-    param limit: limit of songs to find
-    """
-    if self.is_artist_uri(artist):
-      artist = self.get_artist_info(artist)['name']
-
-    results = self.sp.search(q='artist:' + artist, limit=limit)
-    return [u['uri'] for u in results['tracks']['items']]
 
 
   def get_current_user_saved_tracks(self):
@@ -996,6 +1092,7 @@ class SpotifyClient(hass.Hass):
     multiple = True if d.get('multiple', False) else False              # Play multiple tracks if defined
     random_start = True if d.get('random_start', False) else False      # Start playlist, album, list of tracks from a random position
     random_search = True if d.get('random_search', False) else False    # Choose random tracks/artists/albums/etc throughout the algorithm
+    similar = True if d.get('similar', False) else False                # Find recommendations that are similar to the input but not the same
     shuffle = True if d.get('shuffle', False) else False                # Enable shuffle
     repeat = d.get('repeat', 'off')                                     # Enable repeat (options: 'track', 'context', 'off')
     if repeat not in ['track', 'context', 'off']:
@@ -1015,14 +1112,14 @@ class SpotifyClient(hass.Hass):
     if to_play:
       offset = None
       if single:
-        self.log('Single song is turned on.', level=self.DEBUG_LEVEL)
+        self.log('A single song will play.', level=self.DEBUG_LEVEL)
         to_play = self._get_single_track(to_play, random_search)
       elif multiple:
-        self.log('Multiple songs is turned on.', level=self.DEBUG_LEVEL)
+        self.log('Multiple songs will play.', level=self.DEBUG_LEVEL)
         to_play = self._get_multiple_tracks(to_play)
       elif num_tracks > 0: # User specified a specific number of tracks they would like to hear
         self.log('"{}" tracks have been requested to play.'.format(num_tracks), level=self.DEBUG_LEVEL)
-        to_play = self._get_number_of_tracks(to_play, num_tracks, random_search)
+        to_play = self._get_number_of_tracks(to_play, num_tracks, similar, random_search)
       if random_start:
         self.log('Random start is turned on.', level=self.DEBUG_LEVEL)
         offset = self._get_random_offset(to_play)
@@ -1140,7 +1237,7 @@ class SpotifyClient(hass.Hass):
       if not similar:
         self.log('Attempting to use the album name to find the album.', level=self.DEBUG_LEVEL)
         to_play = self.get_album_info(album, artist).get('uri', None)
-      else:
+      elif similar or not to_play:
         self.log('Attempting to use the album name to find a similar album.', level=self.DEBUG_LEVEL)
         album_info = self.get_album_info(album, artist)
         album_artist = album_info.get('artist_uri', None)
@@ -1165,11 +1262,10 @@ class SpotifyClient(hass.Hass):
 
     # Use the user defined artist parameter to find music
     if not to_play and artist:
-      if not similar:
-        self.log('Attempting to use the artist name to find top artist tracks.', level=self.DEBUG_LEVEL)
-        chosen_artist = artist
-      elif similar:
-        self.log('Attempting to use the artist name to find similar music.', level=self.DEBUG_LEVEL)
+      self.log('Attempting to use the artist name to find music.', level=self.DEBUG_LEVEL)
+      chosen_artist = artist
+      if similar:
+        self.log('Attempting to find similar music from the artist.', level=self.DEBUG_LEVEL)
         artist_info = self.get_artist_info(artist)
         similar_artists = self.get_related_artists(artist_info['uri'])
         if similar_artists:
@@ -1180,6 +1276,9 @@ class SpotifyClient(hass.Hass):
 
       if single or not multiple:
         to_play = self.get_top_tracks(chosen_artist)
+        if random_search:
+          to_play += self.get_artist_tracks(chosen_artist, 10, similar, random_search)
+          random.shuffle(to_play)
       if (not single and multiple) or not to_play:
         artist_albums = self.get_artist_albums(chosen_artist)
         if artist_albums:
@@ -1267,22 +1366,20 @@ class SpotifyClient(hass.Hass):
     return uri
 
 
-  def _get_number_of_tracks(self, uri, num_tracks, random_search=False):
+  def _get_number_of_tracks(self, uri, num_tracks, similar=False, random_search=False):
     """
-    Returns a list of tracks that is the specified length
+    Returns a list of tracks that is the specified length using the uri for recommendations
     The return number of tracks is not a guarantee
 
-    param uri: A valid Spotify uri
+    param uri: A valid Spotify uri or list of track uri's
     param num_tracks: Number of songs requested
+    similar: Find tracks from similar artists
     param random_search: Whether or not to randomly choose songs
     """
     res = []
 
-    # Only a list of tracks can be played
     if isinstance(uri, list):
-      for u in uri:
-        if self.is_track_uri(u):
-          res.append(u)
+      res = uri
       if random_search:
         search_uri = random.choice(uri)
       else:
@@ -1292,13 +1389,11 @@ class SpotifyClient(hass.Hass):
       if self.is_track_uri(uri):
         res.append(uri)
       elif self.is_playlist_uri(uri):
-        pl_tracks = self.get_playlist_info(search_uri).get('tracks', None)
-        if pl_tracks:
-          res += pl_tracks
+        pl_tracks = self.get_playlist_info(search_uri).get('tracks', [])
+        res += pl_tracks
       elif self.is_album_uri(uri):
-        album_tracks = self.get_album_info(uri).get('tracks', None)
-        if album_tracks:
-          res += album_tracks
+        album_tracks = self.get_album_info(uri).get('tracks', [])
+        res += album_tracks
       # If uri is an artist uri, we will get tracks later
 
     if len(res) > num_tracks:
@@ -1306,7 +1401,7 @@ class SpotifyClient(hass.Hass):
     elif len(res) == num_tracks:
       return res
 
-    # Determine the artist on the given uri
+    # Determine the artist of the given uri
     search_artist = None
     if self.is_playlist_uri(search_uri):
       tracks = self.get_playlist_info(search_uri)['tracks']
@@ -1317,42 +1412,17 @@ class SpotifyClient(hass.Hass):
           t = tracks[0]
         search_artist = self.get_artist_info(t).get('uri', None)
     else:
-      search_artist = self.get_artist_info(uri).get('uri', None)
+      search_artist = self.get_artist_info(search_uri).get('uri', None)
 
     # Add artist albums tracks until we reach our desired number of tracks
     if search_artist:
-      artist_albums = self.get_artist_albums(search_artist)
-      if artist_albums:
-        for album in artist_albums:
-          if len(res) >= num_tracks:
-            break
-          tracks = self.get_album_tracks(album)
-          if tracks:
-            for t in tracks:
-              if len(res) < num_tracks:
-                res.append(t)
-              else:
-                break
-
-    # We didn't find enough tracks from all artist albums, look for top 10 songs from each related artist
-    if len(res) < num_tracks:
-      related_artists = self.get_related_artists(search_artist)
-      if related_artists:
-        for artist in related_artists:
-          if len(res) >= num_tracks:
-            break
-          tracks = self.get_top_tracks(artist)
-          if tracks:
-            for t in tracks:
-              if len(res) < num_tracks:
-                res.append(t)
-              else:
-                break
-
-    # If we are still short find any recommendation for the input uri artist
-    if len(res) < num_tracks and search_artist:
-      tracks = self.get_recommendations(artists=search_artist, limit=num_tracks-len(res))
-      if tracks:
+      tracks = self.get_artist_tracks(search_artist, num_tracks-len(res), similar, random_search)
+      res += tracks
+      if len(res) < num_tracks:
+        tracks = self.get_artist_tracks(search_artist, num_tracks-len(res), not similar, random_search)
+        res += tracks
+      if len(res) < num_tracks:
+        tracks = self.get_recommendations(artists=search_artist, limit=num_tracks-len(res))
         res += tracks
 
     return res
