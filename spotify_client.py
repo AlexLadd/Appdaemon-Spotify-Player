@@ -99,7 +99,7 @@ class SpotifyClient(hass.Hass):
       self.DEBUG_LEVEL = 'DEBUG'
 
     if self._event_domain_name != DEFAULT_EVENT_DOMAIN_NAME:
-      self.log('Spotify play event name has been changed to a custom event name: "{}"'.format(self._event_play), level=self.DEBUG_LEVEL)
+      self.log('Default event name has been changed to a custom event name: "{}".'.format(self._event_domain_name), level=self.DEBUG_LEVEL)
 
     self.sp = None                      # Spotify client object
     self._access_token = None           # Spotify access token
@@ -143,9 +143,9 @@ class SpotifyClient(hass.Hass):
     self._token_expires = expires
 
     if not access_token:
-      self.log('Did not retrieve token info for spotify.', level='WARNING')
+      self.log('Did not retrieve access token information for Spotify.', level='WARNING')
     else:
-      self.log('Spotify client initialized.', level=self.DEBUG_LEVEL)
+      self.log('Spotify client successfully initialized.', level=self.DEBUG_LEVEL)
       self.sp = spotipy.Spotify(auth=access_token)
 
 
@@ -154,7 +154,7 @@ class SpotifyClient(hass.Hass):
     Starts session to get Spotify access token. (Modified version of spotify_token)
     This version logs in as a real web browser - more powerful token
     """
-    # arbitrary value and can be static
+    # arbitrary cookies value and can be static
     cookies = {"__bon": "MHwwfC01ODc4MjExMzJ8LTI0Njg4NDg3NTQ0fDF8MXwxfDE="}
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_2) \
                   AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"
@@ -185,7 +185,7 @@ class SpotifyClient(hass.Hass):
 
 
   def map_chromecasts(self, device):
-    """ Map alias/mp/dev_id to chromecast device name (friendly media_player name in HA) """
+    """ Map alias/media_player/device id to chromecast device name """
     if device in self._device_aliases:
       return self._device_aliases[device]
     cc_name = self.map_entity_to_chromecast(device)
@@ -220,7 +220,7 @@ class SpotifyClient(hass.Hass):
     return name
 
   def _map_spotify_devid_to_name(self, dev_id):
-    """ Map Spotify device id to device name using cached devices """
+    """ Map Spotify device id to device name using cached Spotify devices """
     return next((name for name, id in self._spotify_devices.items() if id == dev_id), None)
 
 
@@ -228,14 +228,14 @@ class SpotifyClient(hass.Hass):
     """ Returns the type of the Spotify uri (ex: artist, playlist, track, album, etc) """
     parts = uri.split(':')
     if len(parts) < 3:
-      self.log('Invalid Spotify uri: {}'.format(uri), level='WARNING')
+      self.log('Invalid Spotify uri: {}.'.format(uri), level='WARNING')
       return ''
     return parts[-2]
 
 
   def is_spotify_uri(self, uri, media_type=None):
     """ 
-    Check if valid spotify uri
+    Verify if the uri is a valid Spotify uri
 
     param uri: Spotify uri (Format: spotify:(track|playlist|artist|album):twenty-two-digits-here)
     param media_type: The uri type ('track', 'playlist', 'artist', 'album') to check for
@@ -254,19 +254,19 @@ class SpotifyClient(hass.Hass):
     return False
 
   def is_artist_uri(self, uri):
-    """ Test if given uri is a spotify artist """
+    """ Test if the given uri is a valid Spotify artist uri """
     return self.is_spotify_uri(uri, 'artist')
 
   def is_track_uri(self, uri):
-    """ Test if given uri is a spotify track """
+    """ Test if the given uri is a valid Spotify track uri """
     return self.is_spotify_uri(uri, 'track')
 
   def is_playlist_uri(self, uri):
-    """ Test if given uri is a spotify playlist """
+    """ Test if the given uri is a valid Spotify playlist uri """
     return self.is_spotify_uri(uri, 'playlist')
 
   def is_album_uri(self, uri):
-    """ Test if given uri is a spotify album """
+    """ Test if the given uri is a valid Spotify album uri """
     return self.is_spotify_uri(uri, 'album')
 
 
@@ -279,7 +279,7 @@ class SpotifyClient(hass.Hass):
 
   def spotify_play(self, device, uri, offset=None, force_cc_update=False):
     """ 
-    Top level call to play spotify song
+    Top level call to play Spotify song
 
     param device: Spotify device name/media_player id/Spotify device id
     param uri: Spotify track/playlist/artist/album uri/list of tracks
@@ -294,10 +294,9 @@ class SpotifyClient(hass.Hass):
         if not self.is_track_uri(u):
           self.log("Invalid list of Spotify uri's, the song will not play. Only a list of tracks can be played.".format(uri), level='WARNING')
           return
-    else:
-      if not self.is_spotify_uri(uri):
-        self.log('Invalid Spotify uri: "{}", the song will not play.'.format(uri), level='WARNING')
-        return
+    elif not self.is_spotify_uri(uri):
+      self.log('Invalid Spotify uri: "{}", the song will not play.'.format(uri), level='WARNING')
+      return
 
     dev_id = None
     # Only use cached device if we don't need to update CC's
@@ -311,6 +310,7 @@ class SpotifyClient(hass.Hass):
       # Setup our cast spotify controller using the specified device
       if not self._register_spotify_on_cast_device(device_name):
         if self._play_retry_count_cc < MAX_PLAY_ATTEMPTS_CC:
+          self.log('Retrying now...', level='ERROR')
           self._play_retry_count_cc += 1
           self.run_in(self.spotify_play_timer, 1, device=device, uri=uri, off_set=offset)
         else:
@@ -324,8 +324,8 @@ class SpotifyClient(hass.Hass):
     # Play song on spotify device if found
     if dev_id:
       self._last_device = device_name
-      self._play(dev_id, uri, offset)
-      self._log_playback_action(uri, device_name)
+      if self._play(dev_id, uri, offset):
+        self._log_playback_action(uri, device_name)
     else:
       self.log('Could not find device "{}" in Spotify, no song will play.'.format(device_name), level='WARNING')
       # self.log('Discovered Chromecast devices: {}, Spotify devices: {}' \
@@ -338,7 +338,7 @@ class SpotifyClient(hass.Hass):
 
     param device_name: The Spotify device name
     """
-    # Use cached device if possible
+    # Use cached Spotify device if possible
     if device_name in self._spotify_devices:
       self.log('Cached Spotify device used.', level=self.DEBUG_LEVEL)
       dev_id = self._spotify_devices[device_name]
@@ -355,13 +355,13 @@ class SpotifyClient(hass.Hass):
     return dev_id
 
 
-  def _get_chromcast_device(self, device_name=None):
+  def _get_chromcast_device(self, device_name):
     """ 
-    Returns the chromecast device that matches the device_name as a Chromecast object
+    Returns the chromecast device object that matches the device_name
 
-    param device_name: The chromecast device name (if not supplied this method will set the self._chromecasts = all CC's and return None)
+    param device_name: The chromecast device name
     """
-    # Used cached chromecast if possible - This allows spotify_play to execute in about 1 second (versus several seconds)
+    # Used cached chromecast if possible
     if self._chromecasts:
       for cast in self._chromecasts:
         if cast.device.friendly_name == device_name:
@@ -369,15 +369,12 @@ class SpotifyClient(hass.Hass):
           self._last_cast = cast
           return cast
 
-    # Might need to tweak the settings in get_chromecasts
     chromecasts = pychromecast.get_chromecasts(tries=5, retry_wait=5, timeout=30)
     self._chromecasts = chromecasts
-    if not device_name:
-      return None
 
     for cast in chromecasts:
       if cast.device.friendly_name == device_name:
-        self.log('Newly discovered chromecast used.', level=self.DEBUG_LEVEL)
+        self.log('Newly discovered chromecast device used.', level=self.DEBUG_LEVEL)
         self._last_cast = cast
         return cast
     return None
@@ -385,14 +382,14 @@ class SpotifyClient(hass.Hass):
 
   def _register_spotify_on_cast_device(self, cast_name):
     """ 
-    Register Spotify app on given chromecast device 
+    Register Spotify app on a given chromecast device 
     
     param cast_name: Chromecast device name
     """
-    # Get our required chromecast device
+    # Get the chromecast object
     cast = self._get_chromcast_device(cast_name)
     if not cast:
-      self.log('No chromecast device was found with the name: "{}"'.format(cast_name), level='WARNING')
+      self.log('No chromecast device was found with the name: "{}".'.format(cast_name), level='WARNING')
       return False
     cast.wait(timeout=2)
 
@@ -401,18 +398,18 @@ class SpotifyClient(hass.Hass):
     try:
       cast_sc.launch_app(timeout=10)
     except pychromecast.error.LaunchError as e:
-      self.log('Error waiting for status response from Spotify device: "{}", retrying shortly.'.format(cast_name), level='ERROR')
+      self.log('Error waiting for status response from Spotify device: "{}".'.format(e), level='ERROR')
       return False
     except pychromecast.error.NotConnected as e:
-      self.log('Chromecast connection failed with: {}'.format(e), level='ERROR')
+      self.log('Chromecast connection failed with: {}.'.format(e), level='ERROR')
       return False
 
     # Make sure everything was initialized correctly
     if not cast_sc.is_launched and not cast_sc.credential_error:
-      self.log('Failed to launch spotify controller due to timeout', level='ERROR')
+      self.log('Failed to launch spotify controller due to timeout.', level='ERROR')
       return False
     if not cast_sc.is_launched and cast_sc.credential_error:
-      self.log('Failed to launch spotify controller due to credentials error', level='ERROR')
+      self.log('Failed to launch spotify controller due to credentials error.', level='ERROR')
       return False
 
     return True
@@ -420,7 +417,7 @@ class SpotifyClient(hass.Hass):
 
   def _log_playback_action(self, uri, device):
     """ 
-    Log Spotify action based on uri and device - For debugging purposes 
+    Log Spotify playback action based on uri and device - For debugging purposes 
     
     param uri: A valid Spotify uri
     param device: Device name music is playing on
@@ -441,19 +438,17 @@ class SpotifyClient(hass.Hass):
       else:
         self.log('Playing something unknown: "{}" on "{}" speaker.'.format(uri, device), level=self.DEBUG_LEVEL)
     else:
-      if isinstance(uri, list) and self.is_track_uri(uri[0]):
-        self.log('Playing {} tracks on "{}" speaker.'.format(len(uri), device), level=self.DEBUG_LEVEL)
-      else:
-        self.log('Playing something unknown: "{}" on "{}" speaker.'.format(uri, device), level=self.DEBUG_LEVEL)
+      track = self.get_track_info(uri[0])
+      self.log('Playing "{}" tracks starting with "{}" by "{}" on "{}" speaker.'.format(len(uri), track['name'], track['artist'], device), level=self.DEBUG_LEVEL)
 
 
   def _play(self, spotify_device_id, uri, offset=None):
     """ 
     Play music on Spotify device using valid spotify uri (track, playlist, artist, album) and device id 
 
-    param spotify_device_id: Spotify device id of speaker
-    param uri: Spotify track/playlist/artist? uri
-    param offset: Provide offset as an int or track uri to start playback at a particular offset. (Only works for playlist/albums)
+    param spotify_device_id: Spotify device id
+    param uri: A valid Spotify uri
+    param offset: Provide offset as an int or track uri to start playback at a particular position. (Works for playlist/album/list of tracks)
     """
     # Offset format: {“position”: <int>} or {“uri”: “<track uri>”}
     if isinstance(offset, int):
@@ -471,21 +466,23 @@ class SpotifyClient(hass.Hass):
         self.sp.start_playback(device_id=spotify_device_id, uris=uri, offset=o)
       else:
         self.sp.start_playback(device_id=spotify_device_id, context_uri=uri, offset=o)
-      # Save last played uri for restoring playback later
+      # Save last played uri for potentially restoring list of tracks playback later
       self._snapshot_uri = uri
     except spotipy.client.SpotifyException as e:
       # This can occur when a cached device is used that has been reconnected/dropped/disconnected from Spotify
-      device_name = next((device for device, id in self._spotify_devices.items() if id == spotify_device_id), 'Device not cached, this should not occur')
-      self.log('Error playing music on Spotify device: "{}". Error: {}'.format(device_name, e), level='ERROR')
+      device_name = self._map_spotify_devid_to_name(spotify_device_id) or 'unknown'
+      self.log('Error playing music on Spotify device ("{}"): {}'.format(device_name, e), level='ERROR')
 
       # Retry request with a forced CC update
       if self._play_retry_count_spotify < MAX_PLAY_ATTEMPTS_SPOTIY:
         self.log('Retrying...', level='INFO')
         self._play_retry_count_spotify += 1
-        self.run_in(self.spotify_play_timer, 1, device=spotify_device_id, uri=uri, off_set=offset, force_cc_update=True)
-        return
-      self._play_retry_count_spotify = 0
-      self.log('Exceeded max retries.', level='WARNING')
+        self.run_in(self.spotify_play_timer, 1, device=device_name, uri=uri, off_set=offset, force_cc_update=True)
+      else:
+        self._play_retry_count_spotify = 0
+        self.log('Exceeded max retries.', level='WARNING')
+      return False
+    return True
 
   ######################   PLAY SPOTIFY MUSIC METHODS END   ########################
 
@@ -494,16 +491,16 @@ class SpotifyClient(hass.Hass):
 
   def _spotify_controls_event_callback(self, event_name, data, kwargs):
     """
-    Callback for controlling the active Spotify device from HA or AD
+    Callback for the controls event used to control the active Spotify device from HA or AD
 
-    Event Parameters:
+    Event Data Parameters:
 
     Actions -> pause, stop, resume, next, previous, set_volume, 
     increase_volume, decrease_volume, mute, snapshot, restore
 
     device: The device to restore the playback on (optional)
 
-    volume_level
+    volume_level: Desired volume level (0 - 100)
 
     """
     action = data.get('action', None)
@@ -554,7 +551,7 @@ class SpotifyClient(hass.Hass):
 
   @property
   def is_active(self):
-    """ Returns if spotify is currently connected to a device """
+    """ Returns if Spotify is currently connected to a device """
     return self.sp.current_playback() is not None
 
 
@@ -675,7 +672,7 @@ class SpotifyClient(hass.Hass):
 
     result = self.sp.current_playback()
     if not result: # Nothing is currently playing
-      self.logger.log('Nothing is currently playling.', level='INFO')
+      self.log('Nothing is currently playling.', level='INFO')
       return
     
     self._snapshot_info['device_id'] = result['device']['id']
@@ -731,27 +728,27 @@ class SpotifyClient(hass.Hass):
 
   def get_spotify_recommendation(self, artists=None, genres=None, tracks=None, limit=10):
     """
-    Returns recommended tracks as a list
+    Returns recommended tracks as a list or uri's
     This method will recommend tracks from various artists
 
-    param artist: artist name or artist info (returned from self.get_artist_info() method)
-    param genres: genre of music (ex: rock)
-    param tracks: spotify track uri (or track name - but may not find corrent track uri?)
-    param limit: limit of song in list to return (1-100)
+    param artist: Spotify artist uris or names
+    param genres: Genres of music (ex: rock)
+    param tracks: Spotify track uris or names
+    param limit: Limit of tracks to return (1-100)
     """
     if not any([artists, genres, tracks]):
       self.log('Please specify one or more of artists, genres, or tracks.', level='WARNING')
-      return
+      return []
 
     if isinstance(tracks, str):
       if not self.is_track_uri(tracks): # assumes track name was passed in
-        tracks = self.get_track_info(tracks)['uri']
+        tracks = self.get_track_info(tracks).get('uri', tracks)
       tracks = [tracks]
     if isinstance(genres, str):
       genres = [genres]
     if isinstance(artists, str):
       if not self.is_artist_uri(artists): # assumes artist name was passed in
-        artists = self.get_artist_info(artists)['uri']
+        artists = self.get_artist_info(artists).get('uri', artists)
       artists = [artists]
 
     results = self.sp.recommendations(seed_artists=artists, seed_genres=genres, seed_tracks=tracks, limit=limit, min_popularity=50)
@@ -760,9 +757,9 @@ class SpotifyClient(hass.Hass):
 
   def get_recommendation_genre_seeds(self):
     """
-    Returns the available genres for the get_spotify_recommendation() functions as a list of genres
+    Returns the available genres for the get_spotify_recommendation() method as a list of genre strings
     """
-    return self.sp.recommendation_genre_seeds()['genres']
+    return self.sp.recommendation_genre_seeds().get('genres', [])
 
 
   def new_releases(self, country=None, limit=20, offset=0):
@@ -779,16 +776,16 @@ class SpotifyClient(hass.Hass):
 
   def get_playlists_by_category(self, category, country=None, limit=10, offset=0):
     """
-    Returns new album releases featured on Spotify as a list or album uri's
+    Returns new playlist releases featured on Spotify as a list or playlist uri's
     
     param category: A valid Spotify category (can be found from get_categories method)
     param country: Valid ISO 3166-1 alpha-2 country code
-    param limit: Number of desired albums
+    param limit: The number of desired albums
     param offset: The index of the first item to return
     """
     categories = self.get_categories(country=(country or self._country), limit=50) # Limit of 50 should retrieve all categories possible
     if category not in categories:
-      self.log('Invalid category: "{}", valid categories are: {}'.format(category, categories), level='WARNING')
+      self.log('Invalid category: "{}", valid categories are: {}.'.format(category, categories), level='WARNING')
       return []
 
     result = self.sp.category_playlists(category, country=(country or self._country), limit=limit, offset=offset)
@@ -797,7 +794,7 @@ class SpotifyClient(hass.Hass):
 
   def get_categories(self, country=None, locale=None, limit=10, offset=0):
     """
-    Returns valid category id's as a list
+    Returns valid category id's as a list or strings
 
     param country: Valid ISO 3166-1 alpha-2 country code
     param locale: Desired language (ISO 639 language code and an ISO 3166-1 alpha-2 country code, joined by an underscore)
@@ -810,17 +807,17 @@ class SpotifyClient(hass.Hass):
 
   def get_top_tracks(self, artist, country=None):
     """
-    Returns the top 10 top songs from an artist as a list
+    Returns the top 10 tracks from an artist as a list or uri's
     This method will recommend tracks from the specified artist
 
-    param artist: Spotify artist uri or artist name
+    param artist: Spotify artist uri or name
     param country: Valid ISO 3166-1 alpha-2 country code
     """
     if not self.is_artist_uri(artist):
-      artist = self.get_artist_info(artist).get('uri', None)
+      artist = self.get_artist_info(artist).get('uri', artist)
 
-    # We did not find an artist
-    if not artist:
+    if not self.is_artist_uri(artist):
+      self.log('Invalid artist: {}.'.format(artist))
       return []
 
     results = self.sp.artist_top_tracks(artist, country=(country or self._country))
@@ -829,7 +826,7 @@ class SpotifyClient(hass.Hass):
 
   def get_featured_playlists(self, country=None, locale=None, limit=10):
     """
-    Returns featured playlists as a list of playlist uri's
+    Returns featured playlists as a list of uri's
 
     param country: Valid ISO 3166-1 alpha-2 country code
     param locale: Desired language (ISO 639 language code and an ISO 3166-1 alpha-2 country code, joined by an underscore)
@@ -841,9 +838,9 @@ class SpotifyClient(hass.Hass):
 
   def get_artist_tracks(self, artist, limit=10, similar_artists=False, random_search=False):
     """
-    Return artist tracks as a list of uri's
+    Returns artist tracks as a list of uri's
 
-    param artist: Name of the artist or Spotify artist uri
+    param artist: Spotify artist uri or name
     param limit: Limit of tracks to find
     param similar_artists: Find tracks from similar artists
     param random_search: Randomize the search results
@@ -858,7 +855,7 @@ class SpotifyClient(hass.Hass):
 
     res = []
     if not similar_artists:
-      # Find tracks from given artists albums
+      # Find tracks from provided artists
       tracks = self.get_top_tracks(search_artist)
       if tracks:
         res = tracks
@@ -901,28 +898,33 @@ class SpotifyClient(hass.Hass):
     """
     Returns artists related to the given artist as a list of uri's 
 
-    param artist: name of the artist or spotify artist uri
+    param artist: Spotify artist uri or name
     """
     if not self.is_artist_uri(artist):
-      artist_uri = self.get_artist_info(artist)['uri']
-    else:
-      artist_uri = artist
+      artist = self.get_artist_info(artist).get('uri', artist)
 
-    related = self.sp.artist_related_artists(artist_uri)
+    if not self.is_artist_uri(artist):
+      self.log('Invalid artist: {}.'.format(artist))
+      return []
+
+    related = self.sp.artist_related_artists(artist)
     return [u['uri'] for u in related['artists']]
 
 
   def get_album_tracks(self, album, limit=50, offset=0):
     """
-    Returns the tracks of an album as a list of track uri's
+    Returns the tracks of an album as a list of uri's
 
-    param album: Spotify album uri
+    param album: Spotify album uri or name
     param limit: The number of tracks to return
     param offset: The index of the first album to return
     """
     if not self.is_album_uri(album):
-      self.log('Invalid album: {}'.format(album), level='WARNING')
-      return
+      album = self.get_album_info(album).get('uri', album)
+
+    if not self.is_album_uri(album):
+      self.log('Invalid album: {}.'.format(album), level='WARNING')
+      return []
 
     results = self.sp.album_tracks(album, limit=limit, offset=offset)
     return [t['uri'] for t in results['items']]
@@ -930,21 +932,24 @@ class SpotifyClient(hass.Hass):
 
   def get_artist_albums(self, artist, album_type=None, country=None, limit=20, offset=0):
     """
-    Returns albums by the given artist as a list or uri's
+    Returns albums by the given artist as a list of uri's
 
-    param artist: Spotify artist uri or artist name
-    param album_type: One of 'album', 'single', 'appears_on', 'compilation' (optional)
-    param country: Limit responce to one particular country
+    param artist: Spotify artist uri or name
+    param album_type: One of 'album', 'single', 'appears_on', 'compilation'
+    param country: Limit responce to a particular country
     param limit: The number of albums to return
     param offset: The index of the first album to return (1 - 50)
     """ 
     valid_album_types = ['album', 'single', 'appears_on', 'compilation']
     if album_type and album_type not in valid_album_types:
-      self.log('Invalid album_type: {}'.format(album_type), level='WARNING')
-      return
+      self.log('Invalid album_type: {}, setting album_type to None.'.format(album_type), level='WARNING')
 
     if not self.is_artist_uri(artist):
-      artist = self.get_artist_info(artist)['uri']
+      artist = self.get_artist_info(artist).get('uri', artist)
+
+    if not self.is_artist_uri(artist):
+      self.log('Invalid artist: {}.'.format(artist))
+      return []
     
     results = self.sp.artist_albums(artist, album_type=album_type, country=(country or self._country), limit=limit, offset=offset)
     return [a['uri'] for a in results['items']]
@@ -960,15 +965,15 @@ class SpotifyClient(hass.Hass):
 
   def get_all_playlist_tracks_for_user(self, username='me', include_playlist=None, exclude_playlist=None):
     """
-    Return all playlist tracks for a user as a list
+    Returns all playlist tracks for a user as a list of uri's
 
     param username: Spotify username
-    param include: name or uri of playlists to include in the results (optional)
-    param exclude: name or uri of playlists to exclude in the results (optional)
+    param include: Name or uri of playlists to include in the results
+    param exclude: Name or uri of playlists to exclude in the results
     """
     if include_playlist and exclude_playlist:
       self.log('Cannot specify both include and exclude playlists.', level='WARNING')
-      return
+      return []
 
     if isinstance(exclude_playlist, str):
       exclude_playlist = [exclude_playlist]
@@ -988,15 +993,15 @@ class SpotifyClient(hass.Hass):
 
   def get_playlists(self, username='me', include=None, exclude=None):
     """
-    Returns playlists owned by a given user as a list
+    Returns playlists owned by a given user as a list or uri's
 
     param username: name of user to find playlists for
-    param include: name or uri of playlists to include in the results (optional)
-    param exclude: name or uri of playlists to exclude in the results (optional)
+    param include: Name or uri of playlists to include in the results
+    param exclude: Name or uri of playlists to exclude in the results
     """
     if include and exclude:
       self.log('Cannot specify both include and exclude.', level='WARNING')
-      return
+      return []
     
     if include and isinstance(include, str):
       include = [include]
@@ -1016,8 +1021,8 @@ class SpotifyClient(hass.Hass):
 
   def get_current_user_playlists(self):
     """
-    Return playlist from the user whose credentials were used in the config as a list
-    Can also use get_playlists('my_username') as an alternative
+    Returns playlists from the user whose credentials were used in the config as a list or uri's
+    Use get_playlists('my_username') as an alternative
     """
     results = self.sp.current_user_playlists(limit=50)
     return [u['uri'] for u in results['items']]
@@ -1025,7 +1030,7 @@ class SpotifyClient(hass.Hass):
 
   def get_tracks_from_playlist(self, uri):
     """
-    Return the tracks of a playlist as a list
+    Returns the tracks of a playlist as a list or uri's
     
     param uri: Spotify playlist uri
     """
@@ -1061,8 +1066,8 @@ class SpotifyClient(hass.Hass):
     """
     Returns track info as a dictionary
 
-    param track: Spotify track uri or track name
-    param artist: Spotify artist uri or artist name (optional)
+    param track: Spotify track uri or name
+    param artist: Spotify artist uri or name
     """
     if not self.is_track_uri(track):
       results = None
@@ -1092,7 +1097,7 @@ class SpotifyClient(hass.Hass):
     """
     Returns artist info as a dictionary
 
-    param artist: artist name, artist uri, album uri, or track uri from the artist (not playlist uri at this point)
+    param artist: Artist uri or name, album uri, or track uri from the desired artist
     """
     if self.is_track_uri(artist):
       artist_uri = self.get_track_info(artist)['artist_uri']
@@ -1120,10 +1125,10 @@ class SpotifyClient(hass.Hass):
   
   def get_album_info(self, album, artist=None):
     """
-    Returns the artist, album name, number of tracks, album uri, and a list of track uri's as a dictionary
+    Returns album info as a dictionary
 
-    param album: Spotify album uri or album name
-    param artist: Spotify artist uri or artist name (optional)
+    param album: Spotify album uri or name
+    param artist: Spotify artist uri or name
     """
     if not self.is_album_uri(album):
       results = None
@@ -1150,18 +1155,18 @@ class SpotifyClient(hass.Hass):
 
   def _spotify_play_event_callback(self, event_name, data, kwargs):
     """
-    Handles events that play a spotify song to a Spotiy device using event firing from HA or AD
+    Handles the play event - play a spotify song to a Spotiy device using an event fired from HA or AD
     """
     d = data
     
-    device = d.get('device', None)                                      # Spotify device name
+    device = d.get('device', None)
     if not device:
       self.log('Please specify a device.', level='WARNING')
       return
 
-    random_start = True if d.get('random_start', False) else False      # Start playlist, album, list of tracks from a random position
-    shuffle = True if d.get('shuffle', False) else False                # Enable shuffle
-    repeat = d.get('repeat', 'off')                                     # Enable repeat (options: 'track', 'context', 'off')
+    random_start = True if d.get('random_start', False) else False 
+    shuffle = True if d.get('shuffle', False) else False
+    repeat = d.get('repeat', 'off')
     if repeat not in ['track', 'context', 'off']:
       self.log("Invalid repeat state specified: {}, choose one of 'track', 'context', 'off'. Repeat set to 'off'.".format(repeat), level='WARNING')
       repeat = 'off' 
@@ -1175,7 +1180,9 @@ class SpotifyClient(hass.Hass):
         offset = self._get_random_offset(to_play)
       self.spotify_play(device, to_play, offset)
       self.repeat(repeat)
+      if repeat != 'off': self.log('Repeat is turned on to "{}".'.format(repeat))
       self.shuffle(shuffle)
+      if shuffle: self.log('Shuffle is turned on.')
     else:
       self.log('Nothing was found matching your parameters. No music will play.', level='INFO')
 
@@ -1184,34 +1191,35 @@ class SpotifyClient(hass.Hass):
     """
     Make a music recommendation based on the input data
 
-    param data: Dictionary containing user parameters (ex: artist, track, album, random_search, tracks, similar, etc)
+    param data: Dictionary containing user parameters (See the documentation)
     """
     d = data
 
-    random_search = True if d.get('random_search', False) else False    # Choose random tracks/artists/albums/etc throughout the algorithm
-    similar = True if d.get('similar', False) else False                # Find recommendations that are similar to the input but not the same
-    single = True if d.get('single', False) else False                  # Only play one track regardless of other options chosen
-    multiple = True if d.get('multiple', False) else False              # Play multiple tracks if defined
+    random_search = True if d.get('random_search', False) else False
+    similar = True if d.get('similar', False) else False
+    single = True if d.get('single', False) else False
+    multiple = True if d.get('multiple', False) else False
 
     try:
-      num_tracks = int(d.get('tracks', 0))                              # The number of tracks a user would like to hear
+      num_tracks = int(d.get('tracks', 0))
     except ValueError:
-      self.log('Please specifiy a number for "tracks".')
+      self.log('Please specifiy a number for "tracks".', level=self.DEBUG_LEVEL)
       num_tracks = 0
 
     to_play = None
     if not similar:
+      # Check if a uri was passed in
       to_play = self._get_media_from_uri(data)
     if not to_play:
-      # No URI has been passed in, make a recommendation
+      # Nothing was found yet, make a recommendation
       to_play = self._get_recommendation(data)
 
     if to_play:
       if single:
-        self.log('A single song will play.', level=self.DEBUG_LEVEL)
+        self.log('A single song has been requested to play.', level=self.DEBUG_LEVEL)
         to_play = self.get_single_track(to_play, random_search)
       elif multiple:
-        self.log('Multiple songs will play.', level=self.DEBUG_LEVEL)
+        self.log('Multiple songs have been requested to play.', level=self.DEBUG_LEVEL)
         to_play = self.get_multiple_tracks(to_play)
       elif num_tracks > 0: # User specified a specific number of tracks they would like to hear
         self.log('"{}" tracks have been requested to play.'.format(num_tracks), level=self.DEBUG_LEVEL)
@@ -1222,10 +1230,11 @@ class SpotifyClient(hass.Hass):
 
   def _get_media_from_uri(self, data):
     """
-    Checks for a Spotify uri in the data and return the track/playlist/artist/album if found
-    Priority uri order track -> playlist -> album -> artist
+    Checks for a Spotify uri in the data and return the track/playlist/artist/album uri if found
 
-    param data: The event data from the spotify.play event call
+    Priority order: track -> playlist -> album -> artist
+
+    param data: Dictionary containing user parameters (See the documentation)
     """
     d = data 
 
@@ -1250,19 +1259,19 @@ class SpotifyClient(hass.Hass):
       elif self.is_track_uri(track) and multiple: # User wants multiple songs
         return ''
       if valid:
-        self.log('Playing spotify track(s).', level=self.DEBUG_LEVEL)
+        self.log("Found a track uri or list of track uri's.", level=self.DEBUG_LEVEL)
         to_play = track
     elif playlist:
       if self.is_playlist_uri(playlist):
-        self.log('Playing spotify playlist.', level=self.DEBUG_LEVEL)
+        self.log('Found a playlist uri.', level=self.DEBUG_LEVEL)
         to_play = playlist
     elif album:
       if self.is_album_uri(album):
-        self.log('Playing spotify album.', level=self.DEBUG_LEVEL)
+        self.log('Found a album uri.', level=self.DEBUG_LEVEL)
         to_play = album
     elif artist:
       if self.is_artist_uri(artist):
-        self.log('Playing spotify artist.', level=self.DEBUG_LEVEL)
+        self.log('Found a artist uri.', level=self.DEBUG_LEVEL)
         to_play = artist
         if random_search:
           albums = self.get_artist_albums(artist)
@@ -1274,10 +1283,11 @@ class SpotifyClient(hass.Hass):
   def _get_recommendation(self, data):
     """
     Returns a Spotify recommendation based on user input data
+
     Priority order: user defined playlist -> track defined -> album defined -> artist defined -> genre -> category -> 
       -> featured playlist -> newly released album -> users playlist (nothing defined - fallback)
 
-    param data: The data to build the recommendation from
+    param data: Dictionary containing user parameters (See the documentation)
     """
     d = data
 
@@ -1286,21 +1296,21 @@ class SpotifyClient(hass.Hass):
     album = d.get('album', None)
     artist = d.get('artist', None)
 
-    random_search = True if d.get('random_search', False) else False  # Randomize the search
-    user = d.get('username', 'me')                                    # Spotify username
-    genre = d.get('genre', None)                                      # Find all genres from get_recommendation_genre_seeds()
-    category = d.get('category', None)                                # Find all categories from get_categories()
-    featured = True if d.get('featured', False) else False            # Get featured playlist
-    new_releases = True if d.get('new_releases', False) else False    # Get newly released albums
-    single = True if d.get('single', False) else False                # Only play one track regardless of other options chosen
-    multiple = True if d.get('multiple', False) else False            # Play multiple tracks if defined
-    similar = True if d.get('similar', False) else False              # Find recommendations that are similar to the input but not the same
+    random_search = True if d.get('random_search', False) else False
+    user = d.get('username', 'me')
+    genre = d.get('genre', None)
+    category = d.get('category', None)
+    featured = True if d.get('featured', False) else False
+    new_releases = True if d.get('new_releases', False) else False
+    single = True if d.get('single', False) else False
+    multiple = True if d.get('multiple', False) else False
+    similar = True if d.get('similar', False) else False
 
-    to_play = []
+    to_play = None
 
-    # Use the user defined playlist parameter to find music
+    # Use the user defined 'playlist' parameter to find music
     if playlist:
-      self.log('Attempting to use a playlist name to find a user playlist.', level=self.DEBUG_LEVEL)
+      self.log('Attempting to use the playlist name to find a user playlist.', level=self.DEBUG_LEVEL)
       pl = self.get_playlists(username=user, include=playlist)
       if pl:
         if random_search:
@@ -1308,19 +1318,19 @@ class SpotifyClient(hass.Hass):
         else:
           to_play = pl[0]
 
-    # Use the user defined track parameter to find music
+    # Use the user defined 'track' parameter to find music
     if not to_play and track:
       if not similar:
         self.log('Attempting to use the track name to find the song.', level=self.DEBUG_LEVEL)
         to_play = self.get_track_info(track, artist).get('uri', None)
       if not to_play:
-        self.log('Attempting to use the track name to make a similar track recommendations.', level=self.DEBUG_LEVEL)
+        self.log('Attempting to use the track name to make a similar track recommendation.', level=self.DEBUG_LEVEL)
         to_play = self.get_spotify_recommendation(tracks=track, genres=genre, artists=artist)
 
-    # Use the user defined album parameter to find music
+    # Use the user defined 'album' parameter to find music
     if not to_play and album:
       if not similar:
-        self.log('Attempting to use the album name to find the album.', level=self.DEBUG_LEVEL)
+        self.log('Attempting to use the album name to the album.', level=self.DEBUG_LEVEL)
         to_play = self.get_album_info(album, artist).get('uri', None)
       elif similar or not to_play:
         self.log('Attempting to use the album name to find a similar album.', level=self.DEBUG_LEVEL)
@@ -1346,7 +1356,7 @@ class SpotifyClient(hass.Hass):
           else:
             to_play = artist_albums[0]
 
-    # Use the user defined artist parameter to find music
+    # Use the user defined 'artist' parameter to find music
     if not to_play and artist:
       self.log('Attempting to use the artist name to find music.', level=self.DEBUG_LEVEL)
       chosen_artist = artist
@@ -1376,12 +1386,13 @@ class SpotifyClient(hass.Hass):
       if not to_play:
         to_play = self.get_spotify_recommendation(artists=artist, genres=genre, tracks=track)
 
-    # Use the user defined genre parameter to find music
+    # Use the user defined 'genre' parameter to find music
     if not to_play and genre:
       self.log('Attempting to use the genre name to make a recommendation.', level=self.DEBUG_LEVEL)
       if genre in self.get_recommendation_genre_seeds():
         to_play = self.get_spotify_recommendation(artists=artist, genres=genre, tracks=track)
       if not to_play:
+        self.log('No music found matching your genre, attempting to find a matching category.', level=self.DEBUG_LEVEL)
         to_play = self.get_playlists_by_category(category)
         if to_play:
           if random_search:
@@ -1390,7 +1401,7 @@ class SpotifyClient(hass.Hass):
             to_play = to_play[0]
       
 
-    # Use the user defined category parameter to find music
+    # Use the user defined 'category' parameter to find music
     if not to_play and category:
       self.log('Attempting to use the category name to make a recommendation.', level=self.DEBUG_LEVEL)
       to_play = self.get_playlists_by_category(category)
@@ -1400,13 +1411,15 @@ class SpotifyClient(hass.Hass):
         else:
           to_play = to_play[0]
       if not to_play:
+        self.log('No music found matching your category, attempting to find a matching genre.', level=self.DEBUG_LEVEL)
         to_play = self.get_spotify_recommendation(genres=category)
 
-    # Use the user defined featured parameter to find music
+    # Use the user defined 'featured' parameter to find music
     if not to_play and featured:
-      self.log('Attempting to use the find featured playlists.', level=self.DEBUG_LEVEL)
+      self.log('Attempting to find a featured playlist.', level=self.DEBUG_LEVEL)
       to_play = self.get_featured_playlists() # List of playlists
       if not to_play:
+        self.log('No featured playlists were found, attempting to find a newly released album.', level=self.DEBUG_LEVEL)
         to_play = self.new_releases() # List of albums
       if to_play:
         if random_search:
@@ -1414,11 +1427,12 @@ class SpotifyClient(hass.Hass):
         else:
           to_play = to_play[0]
 
-    # Use the user defined new_releases parameter to find music
+    # Use the user defined 'new_releases' parameter to find music
     if not to_play and new_releases:
-      self.log('Attempting to use the find newly released albums.', level=self.DEBUG_LEVEL)
+      self.log('Attempting to find a newly released album.', level=self.DEBUG_LEVEL)
       to_play = self.new_releases() # List of albums
       if not to_play:
+        self.log('No newly released albums were found, attempting to find a featured playlist.', level=self.DEBUG_LEVEL)
         to_play = self.get_featured_playlists() # List of playlists
       if to_play:
         if random_search:
@@ -1426,9 +1440,9 @@ class SpotifyClient(hass.Hass):
         else:
           to_play = to_play[0]
 
-    # Nothing matches the user defined parameters or none were defined - Fallback
+    # Nothing matches the user defined parameters or none were defined - use the fallback
     if not to_play:
-      self.log('No Inputs were matched, using fallback which is a saved user playlist or tracks.', level=self.DEBUG_LEVEL)
+      self.log('No music was found, using the fallback which is a saved user playlist or track.', level=self.DEBUG_LEVEL)
       to_play = self.get_playlists()
       if to_play:
         if random_search:
@@ -1443,7 +1457,7 @@ class SpotifyClient(hass.Hass):
 
   def get_multiple_tracks(self, uri):
     """
-    Ensures the return uri will contain a Spotify uri or list of uri's that will play multiple songs
+    Ensures the return uri will contain a Spotify uri or list of track uri's that will play multiple songs
 
     param uri: A valid Spotify uri or list of uri's
     """
@@ -1455,11 +1469,12 @@ class SpotifyClient(hass.Hass):
 
   def get_number_of_tracks(self, uri, num_tracks, similar=False, random_search=False):
     """
-    Returns a list of tracks that is the specified length using the uri for recommendations
+    Returns a list of tracks that is the num_tracks in length using the given uri for recommendations
+
     The return number of tracks is not a guarantee
 
     param uri: A valid Spotify uri or list of track uri's
-    param num_tracks: Number of songs requested
+    param num_tracks: Number of tracks to return
     similar: Find tracks from similar artists
     param random_search: Whether or not to randomly choose songs
     """
@@ -1499,7 +1514,7 @@ class SpotifyClient(hass.Hass):
     if not search_artist:
       search_artist = self.get_artist_info(search_uri).get('uri', None)
 
-    # Add artist albums tracks until we reach our desired number of tracks
+    # Add artist album tracks until we reach our desired number of tracks
     if search_artist:
       tracks = self.get_artist_tracks(search_artist, num_tracks-len(res), similar, random_search)
       res += tracks
@@ -1517,10 +1532,10 @@ class SpotifyClient(hass.Hass):
     """ 
     Extracts a single track uri from the provided uri
     
-    param uri: A valid Spotify uri
-    param random_track: Choose a random track or not
+    param uri: A valid Spotify uri or list of track uri's
+    param random_track: Whether or not to randomly choose the track
     """
-    # If a list of tracks/playlist/albums is passed in, deal with it
+    # If a list of tracks is passed in, deal with it
     if isinstance(uri, list):
       if random_track:
         uri = random.choice(uri)
@@ -1555,10 +1570,11 @@ class SpotifyClient(hass.Hass):
 
   def _get_random_offset(self, uri):
     """ 
-    Return a random offset that corresponds to a valid Sptotify media type (playlist, artist, album, track, or list of tracks) 
-    Only playlists, albums and lists of tracks can have an offset
+    Return a random offset that corresponds to a valid Spotify media type
 
-    param uri: A valid Spotify uri
+    Only playlists, albums and list of tracks can have an offset
+
+    param uri: A valid Spotify uri or list of track uri's
     """
     if isinstance(uri, list):
       nt = len(uri)
