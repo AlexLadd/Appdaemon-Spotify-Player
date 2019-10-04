@@ -111,6 +111,7 @@ class SpotifyClient(hass.Hass):
     self._play_retry_count_cc = 0       # Current number of song replay tries from cc error
     self._play_retry_count_spotify = 0  # Current number of song replay tries from spotify error
     self._snapshot_info = {}            # Captured snapshot information
+    self._snapshot_uri = None           # Save last Spotify uri played (needed to restore from a list of tracks)
 
     # Register the Spotify play event listener
     self._handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_play)
@@ -125,9 +126,14 @@ class SpotifyClient(hass.Hass):
   def _renew_spotify_token(self, kwargs):
     """ Callback to renew spotify token """
     self._initialize_spotify_client()
-    # Update the CC SpotifyController credentials when token updated - This stopped the music!!!!!
+    # Update the CC SpotifyController credentials when token updated (Sometimes the music stops around the time the token expires)
+    # This does not seem to update the token on the cc app playing the spotify music
     # if self._last_device:
     #   self._register_spotify_on_cast_device(self._last_device)
+    # This should work but is a bit of a hack...
+    # if self.is_active and self._last_device:
+    #   self.take_playback_snapshot()
+    #   self.restore_playback_from_snapshot()
 
 
   def _initialize_spotify_client(self):
@@ -321,8 +327,9 @@ class SpotifyClient(hass.Hass):
       self._play(dev_id, uri, offset)
       self._log_playback_action(uri, device_name)
     else:
-      self.log('Could not find device "{}" in Spotify, no song will play. Discovered Chromecast devices: {}, Spotify devices: {}' \
-        .format(device_name, self.get_found_chromecasts(), ', '.join(self._spotify_devices.keys())), level='WARNING')
+      self.log('Could not find device "{}" in Spotify, no song will play.'.format(device_name), level='WARNING')
+      # self.log('Discovered Chromecast devices: {}, Spotify devices: {}' \
+      #   .format(self.get_found_chromecasts(), ', '.join(self._spotify_devices.keys())), level='WARNING')
 
 
   def _get_spotify_device_devid(self, device_name):
@@ -340,7 +347,7 @@ class SpotifyClient(hass.Hass):
       dev_id = None
       for d in devs['devices']:
         if d['name'] == device_name:
-          self.log('Newly discovered Spotify device found.'.format(devs), level=self.DEBUG_LEVEL)
+          self.log('Newly discovered Spotify device used.'.format(devs), level=self.DEBUG_LEVEL)
           self._spotify_devices[device_name] = d['id']
           dev_id = d['id']
           break
@@ -370,7 +377,7 @@ class SpotifyClient(hass.Hass):
 
     for cast in chromecasts:
       if cast.device.friendly_name == device_name:
-        self.log('Newly discovered chromecast found.', level=self.DEBUG_LEVEL)
+        self.log('Newly discovered chromecast used.', level=self.DEBUG_LEVEL)
         self._last_cast = cast
         return cast
     return None
@@ -464,6 +471,8 @@ class SpotifyClient(hass.Hass):
         self.sp.start_playback(device_id=spotify_device_id, uris=uri, offset=o)
       else:
         self.sp.start_playback(device_id=spotify_device_id, context_uri=uri, offset=o)
+      # Save last played uri for restoring playback later
+      self._snapshot_uri = uri
     except spotipy.client.SpotifyException as e:
       # This can occur when a cached device is used that has been reconnected/dropped/disconnected from Spotify
       device_name = next((device for device, id in self._spotify_devices.items() if id == spotify_device_id), 'Device not cached, this should not occur')
@@ -487,8 +496,15 @@ class SpotifyClient(hass.Hass):
     """
     Callback for controlling the active Spotify device from HA or AD
 
-    Actions: pause, stop, resume, next, previous, set_volume (need extra volume_level parameter), 
+    Event Parameters:
+
+    Actions -> pause, stop, resume, next, previous, set_volume, 
     increase_volume, decrease_volume, mute, snapshot, restore
+
+    device: The device to restore the playback on (optional)
+
+    volume_level
+
     """
     action = data.get('action', None)
 
@@ -650,10 +666,6 @@ class SpotifyClient(hass.Hass):
 
   ######################   PLAYBACK SNAPSHOT METHODS   ########################
 
-  """
-  Caveat: The snapshot does not currently take into account a list of tracks playing - only a single track will be resumed
-  """
-
   def take_playback_snapshot(self):
     """ 
     Take snapshot to allow us to resume playback later with this information
@@ -663,9 +675,8 @@ class SpotifyClient(hass.Hass):
 
     result = self.sp.current_playback()
     if not result: # Nothing is currently playing
-      self.logger.log('Nothing is currently playling', level='INFO')
+      self.logger.log('Nothing is currently playling.', level='INFO')
       return
-
     
     self._snapshot_info['device_id'] = result['device']['id']
     self._snapshot_info['device_name'] = result['device']['name']
@@ -684,18 +695,26 @@ class SpotifyClient(hass.Hass):
     """ 
     Resume playback with the info from the previous snapshot
 
-    param device: Spotify device name to optionally restore the playback on
+    param device: Spotify device name to restore the playback on (optional)
+    param force_cc_update: For a chromecast update when restoring from snapshot
     """
     if not self._snapshot_info:
       self.log('Cannot restore playback since the previous snapshot did not capture anything.', level='WARNING')
       return
 
-    if self._snapshot_info.get('context', False): # An playlist, album, artist was previously playing
+    if self._snapshot_info.get('context', False): 
+      # A playlist, album, artist was previously playing
       uri = self._snapshot_info['context']
       offset = self._snapshot_info['currently_playing_uri']
-    else:
-      uri = self._snapshot_info['currently_playing_uri']
-      offset = None
+    else: 
+      if isinstance(self._snapshot_uri, list):
+        # A list of tracks was previously playing
+        uri = self._snapshot_uri
+        offset = self._snapshot_info['currently_playing_uri']
+      else:
+        # A single track was previously playing
+        uri = self._snapshot_info['currently_playing_uri']
+        offset = None
 
     dev = device if device else self._snapshot_info['device_name']
 

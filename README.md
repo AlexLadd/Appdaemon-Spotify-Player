@@ -141,8 +141,6 @@ Play the album the 'The Wall' with shuffle turned on
   * **restore**: Restore music from a previously taken snapshot (optionally specify the device to restore the music on)
 * **device** (Optional): The device to restore the music on when using action='restore' (default will restore to the device the snapshot was taken from)
 
-**Note**: Snapshot does not currently take into account a list of tracks playing, only a single track will be restored
-
 ### Examples (for Appdaemon)
 **Note**: These can all be played from Home Assistant by firing the controls event with the added parameters
 
