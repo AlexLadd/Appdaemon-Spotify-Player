@@ -32,8 +32,10 @@ DEFAULT_EVENT_CONTROLS = '.controls'
 DEFAULT_COUNTRY = 'CA'
 DEFAULT_LANGUAGE = 'en_CA'
 
-# Max number of times to retry playing a Spotify song
-MAX_PLAY_ATTEMPTS = 2
+# Max number of times to retry playing a Spotify song from CC Error
+MAX_PLAY_ATTEMPTS_CC = 2
+# Max number of times to retry playing a Spotify song from Spotify Error
+MAX_PLAY_ATTEMPTS_SPOTIY = 1
 
 def _is_spotify_country(value):
   """ ISO 3166-1 alpha-2 country code format (ex: 'US') """
@@ -99,15 +101,16 @@ class SpotifyClient(hass.Hass):
     if self._event_domain_name != DEFAULT_EVENT_DOMAIN_NAME:
       self.log('Spotify play event name has been changed to a custom event name: "{}"'.format(self._event_play), level=self.DEBUG_LEVEL)
 
-    self.sp = None                    # Spotify client object
-    self._access_token = None         # Spotify access token
-    self._token_expires = None        # Spotify token expiry in seconds
-    self._chromecasts = []            # All discovered chromecast devices
-    self._spotify_devices = {}        # Spotify device_name -> device_id
-    self._last_cast = None            # The cast device that was last used
-    self._last_device = None          # The name of the Spotify device last used
-    self._play_retry_count = 0        # Current number of song replay tries
-    self._snapshot_info = {}          # Captured snapshot information
+    self.sp = None                      # Spotify client object
+    self._access_token = None           # Spotify access token
+    self._token_expires = None          # Spotify token expiry in seconds
+    self._chromecasts = []              # All discovered chromecast devices
+    self._spotify_devices = {}          # Spotify device_name -> device_id
+    self._last_cast = None              # The cast device that was last used
+    self._last_device = None            # The name of the Spotify device last used
+    self._play_retry_count_cc = 0       # Current number of song replay tries from cc error
+    self._play_retry_count_spotify = 0  # Current number of song replay tries from spotify error
+    self._snapshot_info = {}            # Captured snapshot information
 
     # Register the Spotify play event listener
     self._handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_play)
@@ -122,6 +125,8 @@ class SpotifyClient(hass.Hass):
   def _renew_spotify_token(self, kwargs):
     """ Callback to renew spotify token """
     self._initialize_spotify_client()
+    # Update the CC SpotifyController credentials when token updated
+    self._register_spotify_on_cast_device(self._last_device)
 
 
   def _initialize_spotify_client(self):
@@ -255,16 +260,17 @@ class SpotifyClient(hass.Hass):
 
   def spotify_play_timer(self, kwargs):
     """ Callback for scheduler calls to call spotify_play """
-    self.spotify_play(kwargs['device'], kwargs['uri'], kwargs.get('off_set', None))
+    self.spotify_play(kwargs['device'], kwargs['uri'], kwargs.get('off_set', None), kwargs.get('force_cc_update', False))
 
 
-  def spotify_play(self, device, uri, offset=None):
+  def spotify_play(self, device, uri, offset=None, force_cc_update=False):
     """ 
     Top level call to play spotify song
 
     param device: the friendly_name of the speaker in spotify and HA (helper function used to map aliases)
     param uri: Spotify track/playlist/artist/album uri/list of tracks
     param offset: Provide offset as an int or track uri to start playback at a particular offset.
+    param force_cc_update: Force a chromecast update
     """
     device_name = self.map_chromecasts(device)
 
@@ -279,19 +285,22 @@ class SpotifyClient(hass.Hass):
         self.log('Invalid Spotify uri: "{}", the song will not play.'.format(uri), level='WARNING')
         return
 
-    # Check to see if we already have the device
-    # This includes currently connected chromecasts, spotify connect devices, and desktop players
-    dev_id = self._get_spotify_device_devid(device_name)
+    dev_id = None
+    # Only use cached device if we don't need to update CC's
+    if not force_cc_update:
+      # Check to see if we already have the device
+      # This includes currently connected chromecasts, spotify connect devices, and desktop players
+      dev_id = self._get_spotify_device_devid(device_name)
 
     # We don't already have the device, look for a chromecast
     if dev_id is None:
       # Setup our cast spotify controller using the specified device
       if not self._register_spotify_on_cast_device(device_name):
-        if self._play_retry_count < MAX_PLAY_ATTEMPTS:
-          self._play_retry_count += 1
+        if self._play_retry_count_cc < MAX_PLAY_ATTEMPTS_CC:
+          self._play_retry_count_cc += 1
           self.run_in(self.spotify_play_timer, 1, device=device, uri=uri, off_set=offset)
         else:
-          self._play_retry_count = 0
+          self._play_retry_count_cc = 0
           self.log('Exceeded max retries, the song ("{}") will not play on "{}".'.format(uri, device), level='WARNING')
         return
 
@@ -302,7 +311,7 @@ class SpotifyClient(hass.Hass):
     if dev_id:
       self._last_device = device_name
       self._play(dev_id, uri, offset)
-      self._log_playback_action(uri, device)
+      self._log_playback_action(uri, device_name)
     else:
       self.log('Could not find device "{}" in Spotify, no song will play. Discovered Chromecast devices: {}, Spotify devices: {}' \
         .format(device_name, self.get_found_chromecasts(), ', '.join(self._spotify_devices.keys())), level='WARNING')
@@ -330,7 +339,7 @@ class SpotifyClient(hass.Hass):
 
     return dev_id
 
-
+  # MIGHT NEED TO ADD FORCE UPDATE HERE AS WELL TO PREVENT CACHED DEVICE FROM BEING USED?
   def _get_chromcast_device(self, device_name=None):
     """ 
     Returns the chromecast device that matches the device_name as a Chromecast object
@@ -358,9 +367,7 @@ class SpotifyClient(hass.Hass):
         return cast
     return None
 
-  # Add a force_update parameter to force chromecast to reinitialize the SpotifyController & re-register app on cc device??
-  # This might be required each time the token is updated (Call this directly from _renew_spotify_token with the last used cc device name)
-  # Or toggle a flag each time renew_spotify_token is called and use force_update when that flag is tripped and a spotify_play call is made
+
   def _register_spotify_on_cast_device(self, cast_name):
     """ 
     Register Spotify app on given chromecast device 
@@ -392,7 +399,7 @@ class SpotifyClient(hass.Hass):
     if not cast_sc.is_launched and cast_sc.credential_error:
       self.log('Failed to launch spotify controller due to credentials error', level='ERROR')
       return False
-    
+
     return True
 
 
@@ -450,10 +457,18 @@ class SpotifyClient(hass.Hass):
       else:
         self.sp.start_playback(device_id=spotify_device_id, context_uri=uri, offset=o)
     except spotipy.client.SpotifyException as e:
-      # This can occur when a cached device is used that has been dropped/disconnected from Spotify
-      # Could be prevented by never using cached devices with a trade-off of a significant preformance drop
+      # This can occur when a cached device is used that has been reconnected/dropped/disconnected from Spotify
       device_name = next((device for device, id in self._spotify_devices.items() if id == spotify_device_id), 'Device not cached, this should not occur')
       self.log('Error playing music on Spotify device: "{}". Error: {}'.format(device_name, e), level='ERROR')
+
+      # Retry request with a forced CC update
+      if self._play_retry_count_spotify < MAX_PLAY_ATTEMPTS_SPOTIY:
+        self.log('Retrying...', level='INFO')
+        self._play_retry_count_spotify += 1
+        self.run_in(self.spotify_play_timer, 1, device=device, uri=uri, off_set=offset, force_cc_update=True)
+        return
+      self._play_retry_count_spotify = 0
+      self.log('Exceeded max retries.', level='WARNING')
 
   ######################   PLAY SPOTIFY MUSIC METHODS END   ########################
 
