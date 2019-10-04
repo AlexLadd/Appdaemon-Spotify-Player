@@ -125,8 +125,9 @@ class SpotifyClient(hass.Hass):
   def _renew_spotify_token(self, kwargs):
     """ Callback to renew spotify token """
     self._initialize_spotify_client()
-    # Update the CC SpotifyController credentials when token updated
-    self._register_spotify_on_cast_device(self._last_device)
+    # Update the CC SpotifyController credentials when token updated - This stopped the music!!!!!
+    # if self._last_device:
+    #   self._register_spotify_on_cast_device(self._last_device)
 
 
   def _initialize_spotify_client(self):
@@ -178,12 +179,15 @@ class SpotifyClient(hass.Hass):
 
 
   def map_chromecasts(self, device):
-    """ Map alias to chromecast device name (friendly media_player name in HA) """
+    """ Map alias/mp/dev_id to chromecast device name (friendly media_player name in HA) """
     if device in self._device_aliases:
       return self._device_aliases[device]
     cc_name = self.map_entity_to_chromecast(device)
     if cc_name:
       return cc_name
+    dev_name = self._map_spotify_devid_to_name(device)
+    if dev_name:
+      return dev_name
     return device
 
 
@@ -208,6 +212,10 @@ class SpotifyClient(hass.Hass):
     if name in self._user_aliases:
       return self._user_aliases[name]
     return name
+
+  def _map_spotify_devid_to_name(self, dev_id):
+    """ Map Spotify device id to device name using cached devices """
+    return next((name for name, id in self._spotify_devices.items() if id == dev_id), None)
 
 
   def get_spotify_uri_type(self, uri):
@@ -267,7 +275,7 @@ class SpotifyClient(hass.Hass):
     """ 
     Top level call to play spotify song
 
-    param device: the friendly_name of the speaker in spotify and HA (helper function used to map aliases)
+    param device: Spotify device name/media_player id/Spotify device id
     param uri: Spotify track/playlist/artist/album uri/list of tracks
     param offset: Provide offset as an int or track uri to start playback at a particular offset.
     param force_cc_update: Force a chromecast update
@@ -339,7 +347,7 @@ class SpotifyClient(hass.Hass):
 
     return dev_id
 
-  # MIGHT NEED TO ADD FORCE UPDATE HERE AS WELL TO PREVENT CACHED DEVICE FROM BEING USED?
+
   def _get_chromcast_device(self, device_name=None):
     """ 
     Returns the chromecast device that matches the device_name as a Chromecast object
@@ -465,7 +473,7 @@ class SpotifyClient(hass.Hass):
       if self._play_retry_count_spotify < MAX_PLAY_ATTEMPTS_SPOTIY:
         self.log('Retrying...', level='INFO')
         self._play_retry_count_spotify += 1
-        self.run_in(self.spotify_play_timer, 1, device=device, uri=uri, off_set=offset, force_cc_update=True)
+        self.run_in(self.spotify_play_timer, 1, device=spotify_device_id, uri=uri, off_set=offset, force_cc_update=True)
         return
       self._play_retry_count_spotify = 0
       self.log('Exceeded max retries.', level='WARNING')
@@ -525,7 +533,7 @@ class SpotifyClient(hass.Hass):
           self.set_volume(int(volume_level))
           self.log('Set the current Spotify device volume to "{}" percent.'.format(volume_level), level=self.DEBUG_LEVEL)
         except ValueError:
-          self.log('Please specify a volume_level between 1 and 100 to set the Spotify device volume.', level='WARNING')
+          self.log('Please specify a volume_level between 0 and 100 to set the Spotify device volume.', level='WARNING')
 
 
   @property
@@ -648,17 +656,17 @@ class SpotifyClient(hass.Hass):
 
   def take_playback_snapshot(self):
     """ 
-    Take snapshot to allow us to resume later with this information
-    This currently pauses playback - remove this and allow user to decide the next action?
+    Take snapshot to allow us to resume playback later with this information
     """
     # Reset previous snapshot info
     self._snapshot_info = {}
 
-    if not self.is_active: # Nothing is currently playing
+    result = self.sp.current_playback()
+    if not result: # Nothing is currently playing
       self.logger.log('Nothing is currently playling', level='INFO')
       return
 
-    result = self.sp.current_playback()
+    
     self._snapshot_info['device_id'] = result['device']['id']
     self._snapshot_info['device_name'] = result['device']['name']
     self._snapshot_info['shuffle_state'] = result['shuffle_state']
@@ -669,10 +677,10 @@ class SpotifyClient(hass.Hass):
       self._snapshot_info['context'] = result.get('context', {}).get('uri', False)
     self._snapshot_info['progress_ms'] = result['progress_ms']
 
-    self.pause()
+    # self.pause()
 
   
-  def restore_playback_from_snapshot(self, device=None):
+  def restore_playback_from_snapshot(self, device=None, force_cc_update=False):
     """ 
     Resume playback with the info from the previous snapshot
 
@@ -692,7 +700,7 @@ class SpotifyClient(hass.Hass):
     dev = device if device else self._snapshot_info['device_name']
 
     # Resume playing at the track we left off at
-    self.spotify_play(dev, uri, offset)
+    self.spotify_play(dev, uri, offset, force_cc_update)
 
     # Skip to the last position in the previously playing track
     self.seek_track(self._snapshot_info['progress_ms'])
