@@ -126,7 +126,7 @@ class SpotifyClient(hass.Hass):
   def _renew_spotify_token(self, kwargs):
     """ Callback to renew spotify token """
     self._initialize_spotify_client()
-    # Update the CC SpotifyController credentials when token updated (Sometimes the music stops around the time the token expires)
+    # Update the CC SpotifyController credentials when token is updated (Sometimes the music stops around the time the token expires)
     # This does not seem to update the token on the cc app playing the spotify music
     # if self._last_device:
     #   self._register_spotify_on_cast_device(self._last_device)
