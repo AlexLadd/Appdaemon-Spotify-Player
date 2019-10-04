@@ -185,7 +185,7 @@ class SpotifyClient(hass.Hass):
 
 
   def map_chromecasts(self, device):
-    """ Map alias/media_player/device id to chromecast device name """
+    """ Map alias/media_player/Spotify device id to chromecast device name """
     if device in self._device_aliases:
       return self._device_aliases[device]
     cc_name = self.map_entity_to_chromecast(device)
