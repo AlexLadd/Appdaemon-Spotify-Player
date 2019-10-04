@@ -96,7 +96,7 @@ class SpotifyClient(hass.Hass):
     else:
       self.DEBUG_LEVEL = 'DEBUG'
 
-    if self._event_play != DEFAULT_EVENT_NAME:
+    if self._event_domain_name != DEFAULT_EVENT_DOMAIN_NAME:
       self.log('Spotify play event name has been changed to a custom event name: "{}"'.format(self._event_play), level=self.DEBUG_LEVEL)
 
     self.sp = None                    # Spotify client object
@@ -105,6 +105,7 @@ class SpotifyClient(hass.Hass):
     self._chromecasts = []            # All discovered chromecast devices
     self._spotify_devices = {}        # Spotify device_name -> device_id
     self._last_cast = None            # The cast device that was last used
+    self._last_device = None          # The name of the Spotify device last used
     self._play_retry_count = 0        # Current number of song replay tries
     self._snapshot_info = {}          # Captured snapshot information
 
@@ -279,7 +280,7 @@ class SpotifyClient(hass.Hass):
         return
 
     # Check to see if we already have the device
-    # This include currently connected chromecasts, spotify connect devices, and desktop players
+    # This includes currently connected chromecasts, spotify connect devices, and desktop players
     dev_id = self._get_spotify_device_devid(device_name)
 
     # We don't already have the device, look for a chromecast
@@ -299,7 +300,8 @@ class SpotifyClient(hass.Hass):
 
     # Play song on spotify device if found
     if dev_id:
-      self._play_on_spotify_device(dev_id, uri, offset)
+      self._last_device = device_name
+      self._play(dev_id, uri, offset)
       self._log_playback_action(uri, device)
     else:
       self.log('Could not find device "{}" in Spotify, no song will play. Discovered Chromecast devices: {}, Spotify devices: {}' \
@@ -356,7 +358,9 @@ class SpotifyClient(hass.Hass):
         return cast
     return None
 
-
+  # Add a force_update parameter to force chromecast to reinitialize the SpotifyController & re-register app on cc device??
+  # This might be required each time the token is updated (Call this directly from _renew_spotify_token with the last used cc device name)
+  # Or toggle a flag each time renew_spotify_token is called and use force_update when that flag is tripped and a spotify_play call is made
   def _register_spotify_on_cast_device(self, cast_name):
     """ 
     Register Spotify app on given chromecast device 
@@ -421,7 +425,7 @@ class SpotifyClient(hass.Hass):
         self.log('Playing something unknown: "{}" on "{}" speaker.'.format(uri, device), level=self.DEBUG_LEVEL)
 
 
-  def _play_on_spotify_device(self, spotify_device_id, uri, offset=None):
+  def _play(self, spotify_device_id, uri, offset=None):
     """ 
     Play music on Spotify device using valid spotify uri (track, playlist, artist, album) and device id 
 
@@ -460,7 +464,8 @@ class SpotifyClient(hass.Hass):
     """
     Callback for controlling the active Spotify device from HA or AD
 
-    Actions: pause, stop, resume, next, previous, set_volume (need extra volume_level parameter), increase_volume, decrease_volume, mute, snapshot, restore
+    Actions: pause, stop, resume, next, previous, set_volume (need extra volume_level parameter), 
+    increase_volume, decrease_volume, mute, snapshot, restore
     """
     action = data.get('action', None)
 
@@ -1112,18 +1117,42 @@ class SpotifyClient(hass.Hass):
       self.log('Please specify a device.', level='WARNING')
       return
 
-    single = True if d.get('single', False) else False                  # Only play one track regardless of other options chosen
-    multiple = True if d.get('multiple', False) else False              # Play multiple tracks if defined
     random_start = True if d.get('random_start', False) else False      # Start playlist, album, list of tracks from a random position
-    random_search = True if d.get('random_search', False) else False    # Choose random tracks/artists/albums/etc throughout the algorithm
-    similar = True if d.get('similar', False) else False                # Find recommendations that are similar to the input but not the same
     shuffle = True if d.get('shuffle', False) else False                # Enable shuffle
     repeat = d.get('repeat', 'off')                                     # Enable repeat (options: 'track', 'context', 'off')
     if repeat not in ['track', 'context', 'off']:
-      self.log("Invalid repeat state specified: {}, choose one of 'track', 'context', 'off'".format(repeat), level='WARNING')
+      self.log("Invalid repeat state specified: {}, choose one of 'track', 'context', 'off'. Repeat set to 'off'.".format(repeat), level='WARNING')
       repeat = 'off' 
+
+    to_play = self.get_recommendation(data)
+
+    if to_play:
+      offset = None
+      if random_start:
+        self.log('Random start is turned on.', level=self.DEBUG_LEVEL)
+        offset = self._get_random_offset(to_play)
+      self.spotify_play(device, to_play, offset)
+      self.repeat(repeat)
+      self.shuffle(shuffle)
+    else:
+      self.log('Nothing was found matching your parameters. No music will play.', level='INFO')
+
+
+  def get_recommendation(self, data):
+    """
+    Make a music recommendation based on the input data
+
+    param data: Dictionary containing user parameters (ex: artist, track, album, random_search, tracks, similar, etc)
+    """
+    d = data
+
+    random_search = True if d.get('random_search', False) else False    # Choose random tracks/artists/albums/etc throughout the algorithm
+    similar = True if d.get('similar', False) else False                # Find recommendations that are similar to the input but not the same
+    single = True if d.get('single', False) else False                  # Only play one track regardless of other options chosen
+    multiple = True if d.get('multiple', False) else False              # Play multiple tracks if defined
+
     try:
-      num_tracks = int(d.get('tracks', 0))                       # The number of tracks a user would like to hear (single and multiple will take priority over this)
+      num_tracks = int(d.get('tracks', 0))                              # The number of tracks a user would like to hear
     except ValueError:
       self.log('Please specifiy a number for "tracks".')
       num_tracks = 0
@@ -1133,10 +1162,9 @@ class SpotifyClient(hass.Hass):
       to_play = self._get_media_from_uri(data)
     if not to_play:
       # No URI has been passed in, make a recommendation
-      to_play = self.get_recommendation(data)
+      to_play = self._get_recommendation(data)
 
     if to_play:
-      offset = None
       if single:
         self.log('A single song will play.', level=self.DEBUG_LEVEL)
         to_play = self.get_single_track(to_play, random_search)
@@ -1146,14 +1174,8 @@ class SpotifyClient(hass.Hass):
       elif num_tracks > 0: # User specified a specific number of tracks they would like to hear
         self.log('"{}" tracks have been requested to play.'.format(num_tracks), level=self.DEBUG_LEVEL)
         to_play = self.get_number_of_tracks(to_play, num_tracks, similar, random_search)
-      if random_start:
-        self.log('Random start is turned on.', level=self.DEBUG_LEVEL)
-        offset = self._get_random_offset(to_play)
-      self.spotify_play(device, to_play, offset)
-      self.repeat(repeat)
-      self.shuffle(shuffle)
-    else:
-      self.log('Nothing was found matching your parameters. No music will play.', level='INFO')
+
+    return to_play
 
 
   def _get_media_from_uri(self, data):
@@ -1207,7 +1229,7 @@ class SpotifyClient(hass.Hass):
     return to_play
 
 
-  def get_recommendation(self, data):
+  def _get_recommendation(self, data):
     """
     Returns a Spotify recommendation based on user input data
     Priority order: user defined playlist -> track defined -> album defined -> artist defined -> genre -> category -> 
@@ -1236,7 +1258,7 @@ class SpotifyClient(hass.Hass):
 
     # Use the user defined playlist parameter to find music
     if playlist:
-      self.log('Attempting to use a playlist name find a user playlist.', level=self.DEBUG_LEVEL)
+      self.log('Attempting to use a playlist name to find a user playlist.', level=self.DEBUG_LEVEL)
       pl = self.get_playlists(username=user, include=playlist)
       if pl:
         if random_search:
@@ -1463,6 +1485,7 @@ class SpotifyClient(hass.Hass):
       else:
         uri = uri[0]
 
+    tracks = []
     if self.is_track_uri(uri):
       return uri
     if self.is_playlist_uri(uri):
@@ -1471,12 +1494,17 @@ class SpotifyClient(hass.Hass):
       tracks = self.get_album_info(uri)['tracks']
     elif self.is_artist_uri(uri):
       albums = self.get_artist_albums(uri)
-      if random_track:
-        album = random.choice(albums)
-      else:
-        album = album[0]
-      tracks = self.get_album_info(album)['tracks']
+      if albums:
+        if random_track:
+          album = random.choice(albums)
+        else:
+          album = album[0]
+        tracks = self.get_album_info(album)['tracks']
     
+    # We didn't find anything
+    if not tracks:
+      return uri
+
     if random_track:
       return random.choice(tracks)
     else:
