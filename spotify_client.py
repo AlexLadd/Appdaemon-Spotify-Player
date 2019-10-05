@@ -107,6 +107,7 @@ class SpotifyClient(hass.Hass):
     self._chromecasts = []              # All discovered chromecast devices
     self._spotify_devices = {}          # Spotify device_name -> device_id
     self._last_cast = None              # The cast device that was last used
+    self._last_cast_sc = None           # The last SpotifyController used
     self._last_device = None            # The name of the Spotify device last used
     self._play_retry_count_cc = 0       # Current number of song replay tries from cc error
     self._play_retry_count_spotify = 0  # Current number of song replay tries from spotify error
@@ -114,10 +115,10 @@ class SpotifyClient(hass.Hass):
     self._snapshot_uri = None           # Save last Spotify uri played (needed to restore from a list of tracks)
 
     # Register the Spotify play event listener
-    self._handle_spotify_play = self.listen_event(self._spotify_play_event_callback, event=self._event_play)
+    self.listen_event(self._spotify_play_event_callback, event=self._event_play)
 
     # Register the Spotify play event listener
-    self._handle_spotify_controls = self.listen_event(self._spotify_controls_event_callback, event=self._event_controls)
+    self.listen_event(self._spotify_controls_event_callback, event=self._event_controls)
 
     # Spotify web token is valid for 3600 seconds, so renew before 1 hour expires
     self.run_every(self._renew_spotify_token, self.datetime() + datetime.timedelta(seconds=2), 3500)
@@ -127,13 +128,11 @@ class SpotifyClient(hass.Hass):
     """ Callback to renew spotify token """
     self._initialize_spotify_client()
     # Update the CC SpotifyController credentials when token is updated (Sometimes the music stops around the time the token expires)
-    # This does not seem to update the token on the cc app playing the spotify music
-    # if self._last_device:
-    #   self._register_spotify_on_cast_device(self._last_device)
-    # This should work but is a bit of a hack...
-    # if self.is_active and self._last_device:
-    #   self.take_playback_snapshot()
-    #   self.restore_playback_from_snapshot()
+    # If the last device used was a chromecast device and currently active than update its credentials
+    if self._last_device and self.is_active:
+      cast = self._get_chromcast_device(self._last_device)
+      if cast:
+        self._update_cast_spotify_app_credentials()
 
 
   def _initialize_spotify_client(self):
@@ -299,8 +298,12 @@ class SpotifyClient(hass.Hass):
       return
 
     dev_id = None
+    is_cc_device = self._get_chromcast_device(device_name) is not None
+    if not is_cc_device:
+      self._last_cast_sc = None
     # Only use cached device if we don't need to update CC's
-    if not force_cc_update:
+    # No force update and not a CC device or is a CC device and we already have a reference to it
+    if not force_cc_update and (not is_cc_device or (is_cc_device and self._last_cast_sc)):
       # Check to see if we already have the device
       # This includes currently connected chromecasts, spotify connect devices, and desktop players
       dev_id = self._get_spotify_device_devid(device_name)
@@ -394,6 +397,7 @@ class SpotifyClient(hass.Hass):
     cast.wait(timeout=2)
 
     cast_sc = SpotifyController(self._access_token, self._token_expires)
+    self._last_cast_sc = cast_sc
     cast.register_handler(cast_sc)
     try:
       cast_sc.launch_app(timeout=10)
@@ -413,6 +417,21 @@ class SpotifyClient(hass.Hass):
       return False
 
     return True
+
+
+  def _update_cast_spotify_app_credentials(self):
+    """ 
+    Update the Spotify app credentials on the cast SpotifyController that is currently active
+    """
+    if self._last_cast_sc:
+      self.log('Updated cast SpotifyController app credentials.', level=self.DEBUG_LEVEL)
+      self._last_cast_sc.send_message({
+        "type": "setCredentials",
+        "credentials": self._access_token,
+        "expiresIn": self._token_expires,
+      })
+    else:
+      self.log('Tried to update cast_sc credentials but self._last_cast_sc does not exist.', level='WARNING')
 
 
   def _log_playback_action(self, uri, device):
@@ -688,12 +707,11 @@ class SpotifyClient(hass.Hass):
     # self.pause()
 
   
-  def restore_playback_from_snapshot(self, device=None, force_cc_update=False):
+  def restore_playback_from_snapshot(self, device=None):
     """ 
     Resume playback with the info from the previous snapshot
 
     param device: Spotify device name to restore the playback on (optional)
-    param force_cc_update: For a chromecast update when restoring from snapshot
     """
     if not self._snapshot_info:
       self.log('Cannot restore playback since the previous snapshot did not capture anything.', level='WARNING')
@@ -716,7 +734,7 @@ class SpotifyClient(hass.Hass):
     dev = device if device else self._snapshot_info['device_name']
 
     # Resume playing at the track we left off at
-    self.spotify_play(dev, uri, offset, force_cc_update)
+    self.spotify_play(dev, uri, offset)
 
     # Skip to the last position in the previously playing track
     self.seek_track(self._snapshot_info['progress_ms'])
@@ -846,7 +864,7 @@ class SpotifyClient(hass.Hass):
     param random_search: Randomize the search results
     """
     if not self.is_artist_uri(artist):
-      search_artist = self.get_artist_info(artist)['uri']
+      search_artist = self.get_artist_info(artist).get('uri', artist)
     else:
       search_artist = artist
 
