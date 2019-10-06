@@ -3,9 +3,10 @@
 ### Appdaemon app that plays Spotify songs on a Spotify connected device from Home Assistant or Appdaemon.
 
 Easily play music on a Spotify connected device from artists, albums, tracks, and playlists or get recommendations from your 
-favourite music without the need to know the Spotify uri. All with a single event!
+favourite music without the need to know the Spotify uri. All with a single event!   
 
-
+This app also includes the functionality to take a snapshot and restore restore playback using an event. This 
+can be useful when making a TTS announcement and restoring the music afterwards.   
 
 ## Installation/Configuration Instructions
 
