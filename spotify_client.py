@@ -129,10 +129,10 @@ class SpotifyClient(hass.Hass):
     self._initialize_spotify_client()
     # Update the CC SpotifyController credentials when token is updated (Sometimes the music stops around the time the token expires)
     # If the last device used was a chromecast device and currently active than update its credentials
-    if self._last_device and self.is_active:
-      cast = self._get_chromcast_device(self._last_device)
-      if cast:
-        self._update_cast_spotify_app_credentials()
+    # if self._last_device and self.is_active:
+    #   cast = self._get_chromcast_device(self._last_device)
+    #   if cast:
+    #     self._update_cast_spotify_app_credentials()
 
 
   def _update_cast_spotify_app_credentials(self):
@@ -148,7 +148,7 @@ class SpotifyClient(hass.Hass):
         })
         self.log('Updated cast SpotifyController app credentials.', level=self.DEBUG_LEVEL)
       except pychromecast.error.PyChromecastStopped as e:
-        self.log('Error updating cast SpotifyController app credentials: {}'.format(e), level=self.DEBUG_LEVEL)
+        self.log('Error updating cast SpotifyController app credentials: {}'.format(e), level='WARNING')
     else:
       self.log('Tried to update cast_sc credentials but self._last_cast_sc does not exist.', level='WARNING')
 
@@ -316,12 +316,11 @@ class SpotifyClient(hass.Hass):
       self.log('Invalid Spotify uri: "{}", the song will not play.'.format(uri), level='WARNING')
       return
 
-    # Check if Spotify is already connect to device if device is not a CC or no CC update required
+    # Check if Spotify is already connectted to device and device is not a CC or no CC update required
     dev_id = None
     is_cc_device = self._get_chromcast_device(device_name) is not None
     if not is_cc_device:
       self._last_cast_sc = None
-      self._last_cast = None
     if not force_cc_update and (not is_cc_device or (is_cc_device and self._last_cast_sc)):
       dev_id = self._get_spotify_device_devid(device_name)
 
@@ -331,7 +330,7 @@ class SpotifyClient(hass.Hass):
         if self._play_retry_count_cc < MAX_PLAY_ATTEMPTS_CC:
           self.log('Retrying now...', level='ERROR')
           self._play_retry_count_cc += 1
-          self.run_in(self.spotify_play_timer, 1, device=device, uri=uri, off_set=offset)
+          self.run_in(self.spotify_play_timer, 2, device=device, uri=uri, off_set=offset)
         else:
           self._play_retry_count_cc = 0
           self.log('Exceeded max retries, the song ("{}") will not play on "{}".'.format(uri, device), level='WARNING')
@@ -383,6 +382,7 @@ class SpotifyClient(hass.Hass):
     if self._chromecasts:
       for cast in self._chromecasts:
         if cast.device.friendly_name == device_name:
+          # self.log('Using cached CC device.', level=self.DEBUG_LEVEL)
           self._last_cast = cast
           return cast
 
@@ -391,6 +391,7 @@ class SpotifyClient(hass.Hass):
 
     for cast in chromecasts:
       if cast.device.friendly_name == device_name:
+        # self.log('Using new discovered CC device.', level=self.DEBUG_LEVEL)
         self._last_cast = cast
         return cast
 
@@ -408,7 +409,12 @@ class SpotifyClient(hass.Hass):
     if not cast:
       self.log('No chromecast device was found with the name: "{}".'.format(cast_name), level='WARNING')
       return False
-    cast.wait(timeout=2)
+    try:
+      cast.wait(timeout=3)
+    except RuntimeError as e:
+      # We are already connected?
+      self.log('Chromecast threading error while waiting: {}.'.format(e), level='ERROR')
+      return False 
 
     cast_sc = SpotifyController(self._access_token, self._token_expires)
     self._last_cast_sc = cast_sc
@@ -420,6 +426,9 @@ class SpotifyClient(hass.Hass):
       return False
     except pychromecast.error.NotConnected as e:
       self.log('Chromecast connection failed with: {}.'.format(e), level='ERROR')
+      return False
+    except pychromecast.error.PyChromecastStopped as e:
+      self.log('Chromecast threading error while launching app: {}.'.format(e), level='ERROR')
       return False
 
     # Make sure everything was initialized correctly
@@ -576,6 +585,14 @@ class SpotifyClient(hass.Hass):
     return self.sp.current_playback() is not None
 
 
+  def get_active_device(self):
+    """ Get the active Spotify speaker name """
+    playback_info = self.sp.current_playback()
+    if playback_info:
+      return playback_info['device']['name']
+    return None
+
+
   def repeat(self, state, device=None):
     """
     Sets the Spotify device's repeat state
@@ -695,7 +712,7 @@ class SpotifyClient(hass.Hass):
     if not result: # Nothing is currently playing
       self.log('Nothing is currently playling.', level='INFO')
       return
-    
+
     self._snapshot_info['device_id'] = result['device']['id']
     self._snapshot_info['device_name'] = result['device']['name']
     self._snapshot_info['shuffle_state'] = result['shuffle_state']
@@ -1592,7 +1609,7 @@ class SpotifyClient(hass.Hass):
     """ 
     Return a random offset that corresponds to a valid Spotify media type
 
-    Only playlists, albums and list of tracks can have an offset
+    Only playlists, albums and a list of tracks can have an offset
 
     param uri: A valid Spotify uri or list of track uri's
     """
@@ -1609,8 +1626,30 @@ class SpotifyClient(hass.Hass):
 
   ######################   SPOTIFY PLAY EVENT HANDLING METHODS END   ########################
 
+  def _disconnect_cast(self, cast):
+    """ 
+    Disconnect Chromecast device from socket connection
+
+    param cast: The Chromecast device to disconnect
+    """
+    name = cast.name
+    try :
+      cast.disconnect()
+      self.log('Disconnected cast: "{}"'.format(name))
+    except Exception as e:
+      # self.log('Failed to disconnect "{}", error: {}'.format(name, e), level='WARNING')
+      pass
+
+
+  def _disconnect_casts(self):
+    """ 
+    Disconnect all discovered Chromecast devices from socket connection
+    """
+    for cast in self._chromecasts:
+      self._disconnect_cast(cast)
+
 
   def terminate(self):
-    pass
+    self._disconnect_casts()
 
 
