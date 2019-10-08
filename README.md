@@ -141,6 +141,7 @@ Play the album the 'The Wall' with shuffle turned on
   * **snapshot**: Take a snapshot of what is currently playing on Spotify
   * **restore**: Restore music from a previously taken snapshot (optionally specify the device to restore the music on)
 * **device** (Optional): The device to restore the music on when using action='restore' (default will restore to the device the snapshot was taken from)
+* **transfer_playback**: Transfer the currently playing music to the specified device
 
 ### Examples (for Appdaemon)
 **Note**: These can all be played from Home Assistant by firing the controls event with the added parameters

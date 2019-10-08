@@ -611,6 +611,8 @@ class SpotifyClient(hass.Hass):
 
     volume_level: Desired volume level (0 - 100)
 
+    transfer_playback: The device name to transfer the music to
+
     """
     action = data.get('action', None)
 
@@ -658,6 +660,10 @@ class SpotifyClient(hass.Hass):
           self.log('Set the current Spotify device volume to "{}" percent.'.format(volume_level), level=self.DEBUG_LEVEL)
         except ValueError:
           self.log('Please specify a volume_level between 0 and 100 to set the Spotify device volume.', level='WARNING')
+
+    if 'transfer_playback' in data:
+      device = data.get('transfer_playback', None)
+      self.transfer_playback(device)
 
 
   @property
