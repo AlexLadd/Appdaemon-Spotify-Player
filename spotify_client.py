@@ -1,13 +1,13 @@
 """
 Appdaemon app to play Spotify songs on a Spotify connected device using an event fired from Home Assistant or Appdaemon.
 
+Also provides the ability to control the Spotify player as well as take a snapshot and restore playback from the snapshot.
+
 See https://github.com/AlexLadd/Appdaemon-Spotify-Player/blob/master/spotify_client.py for configuration and examples.
 """
 
 import appdaemon.plugins.hass.hassapi as hass
 import spotipy
-from pychromecast.controllers.spotify import SpotifyController
-import pychromecast
 import random
 import datetime
 import time
@@ -15,6 +15,13 @@ import voluptuous as vol
 import requests
 from bs4 import BeautifulSoup
 import json
+from pychromecast.controllers.spotify import SpotifyController
+import pychromecast
+from pychromecast.socket_client import (
+    CONNECTION_STATUS_CONNECTED,
+    CONNECTION_STATUS_DISCONNECTED,
+    CONNECTION_STATUS_CONNECTING,
+)
 
 CONF_USERNAME = 'username'
 CONF_PASSWORD = 'password'
@@ -32,10 +39,10 @@ DEFAULT_EVENT_CONTROLS = '.controls'
 DEFAULT_COUNTRY = 'CA'
 DEFAULT_LANGUAGE = 'en_CA'
 
-# Max number of times to retry playing a Spotify song from CC Error
-MAX_PLAY_ATTEMPTS_CC = 2
-# Max number of times to retry playing a Spotify song from Spotify Error
-MAX_PLAY_ATTEMPTS_SPOTIY = 2
+# Max number of times to retry playing a song
+MAX_PLAY_ATTEMPTS = 2
+# Max number of times to retry transfering a song
+MAX_TRANSFER_ATTEMPTS = 2
 
 def _is_spotify_country(value):
   """ ISO 3166-1 alpha-2 country code format (ex: 'US') """
@@ -104,20 +111,19 @@ class SpotifyClient(hass.Hass):
     self.sp = None                      # Spotify client object
     self._access_token = None           # Spotify access token
     self._token_expires = None          # Spotify token expiry in seconds
-    self._chromecasts = []              # All discovered chromecast devices
+    self._chromecasts = {}              # Cast UUID -> CastDevice object
     self._spotify_devices = {}          # Spotify device_name -> device_id
-    self._last_cast = None              # The cast device that was last used
     self._last_cast_sc = None           # The last SpotifyController used
     self._last_device = None            # The name of the Spotify device last used
-    self._play_retry_count_cc = 0       # Current number of song replay tries from cc error
-    self._play_retry_count_spotify = 0  # Current number of song replay tries from spotify error
+    self._transfer_retry_count = 0      # Current number of song replay tries from cc error
+    self._play_retry_count = 0          # Current number of song replay tries from spotify error
     self._snapshot_info = {}            # Captured snapshot information
     self._snapshot_uri = None           # Save last Spotify uri played (needed to restore from a list of tracks)
 
     # Register the Spotify play event listener
     self.listen_event(self._spotify_play_event_callback, event=self._event_play)
 
-    # Register the Spotify play event listener
+    # Register the Spotify controls event listener
     self.listen_event(self._spotify_controls_event_callback, event=self._event_controls)
 
     # Spotify web token is valid for 3600 seconds, so renew before 1 hour expires
@@ -138,6 +144,8 @@ class SpotifyClient(hass.Hass):
   def _update_cast_spotify_app_credentials(self):
     """ 
     Update the Spotify app credentials on the cast SpotifyController that is currently active
+
+    Currently experimental
     """
     if self._last_cast_sc:
       try:
@@ -202,7 +210,11 @@ class SpotifyClient(hass.Hass):
 
 
   def map_chromecasts(self, device):
-    """ Map alias/media_player/Spotify device id to chromecast device name """
+    """ 
+    Map device to Chromecast device name 
+    
+    param device: Spotify device id/media_player entity_id/Alias (from app config device_aliases)
+    """
     if device in self._device_aliases:
       return self._device_aliases[device]
     cc_name = self.map_entity_to_chromecast(device)
@@ -290,12 +302,64 @@ class SpotifyClient(hass.Hass):
 
   ######################   PLAY SPOTIFY MUSIC METHODS   ########################
 
-  def spotify_play_timer(self, kwargs):
-    """ Callback for scheduler calls to call spotify_play """
-    self.spotify_play(kwargs['device'], kwargs['uri'], kwargs.get('off_set', None), kwargs.get('force_cc_update', False))
+  def transfer_playback_timer_callback(self, kwargs):
+    """ Callback for scheduler calls to call transfer_playback """
+    self.transfer_playback(kwargs['device'], kwargs.get('force_cc_update', False))
 
 
-  def spotify_play(self, device, uri, offset=None, force_cc_update=False):
+  def transfer_playback(self, device, force_cc_update=False):
+    """ 
+    Transfer Spotify music to another device - Top level call
+
+    param device: Spotify device name/media_player id/Spotify device id
+    param force_cc_update: Force a chromecast update
+    """
+    device_name = self.map_chromecasts(device)
+
+    dev_id = self._get_spotify_device_devid(device_name, force_cc_update)
+
+    success = False
+    if dev_id:
+      self._last_device = device_name
+      success = self._transfer_playback(dev_id, True)
+      
+    # No Spotify device was found or playback wasn't transfered correctly, retry if below limit
+    if not success or dev_id is None: 
+      if self._transfer_retry_count < MAX_TRANSFER_ATTEMPTS:
+        self.log('Retrying transfering playback now...', level=self.DEBUG_LEVEL)
+        self._transfer_retry_count += 1
+        self.run_in(self.transfer_playback_timer_callback, 2, device=device, force_cc_update=True)
+        return
+      else:
+        self.log('Max retries reached trying to transfer playback to: "{}".'.format(device_name), level='ERROR')
+
+    self._transfer_retry_count = 0
+
+
+  def _transfer_playback(self, spotify_device_id, force_play=True):
+    """ 
+    Transfer Spotify music to another device
+
+    param device: Valid Spotify device id
+    param force_play: State of playback when transfered (True: Play, False: Maintain current state)
+    """
+    device_name = self._map_spotify_devid_to_name(spotify_device_id) or spotify_device_id
+    try:
+      self.sp.transfer_playback(device_id=spotify_device_id, force_play=force_play)
+      self.log('Transfering music to: "{}".'.format(device_name), level=self.DEBUG_LEVEL)
+    except spotipy.client.SpotifyException as e:
+      # This can occur when a cached device is used that has been reconnected/dropped/disconnected from Spotify
+      self.log('Error transfering music on Spotify device ("{}"): {}'.format(device_name, e), level='ERROR')
+      return False
+    return True
+
+
+  def play_timer_callback(self, kwargs):
+    """ Callback for scheduler calls to call play """
+    self.play(kwargs['device'], kwargs['uri'], kwargs.get('off_set', None), kwargs.get('force_cc_update', False))
+
+
+  def play(self, device, uri, offset=None, force_cc_update=False):
     """ 
     Top level call to play Spotify song
 
@@ -316,42 +380,89 @@ class SpotifyClient(hass.Hass):
       self.log('Invalid Spotify uri: "{}", the song will not play.'.format(uri), level='WARNING')
       return
 
-    # Check if Spotify is already connectted to device and device is not a CC or no CC update required
+    dev_id = self._get_spotify_device_devid(device_name, force_cc_update)
+
+    success = False
+    if dev_id:
+      self._last_device = device_name
+      success = self._play(dev_id, uri, offset)
+
+    if not success or dev_id is None:
+      if self._play_retry_count < MAX_PLAY_ATTEMPTS:
+        self.log('Retrying playing Spotify music now...', level=self.DEBUG_LEVEL)
+        self._play_retry_count += 1
+        self.run_in(self.play_timer_callback, 1, device=device_name, uri=uri, off_set=offset, force_cc_update=True)
+        return
+      else:
+        self.log('Max retries reached trying to play Spotify music on: "{}". No music will play.'.format(device_name), level='ERROR')
+
+    self._play_retry_count = 0
+
+
+  def _play(self, spotify_device_id, uri, offset=None):
+    """ 
+    Play music on Spotify device using valid spotify uri (track, playlist, artist, album) and device id 
+
+    param spotify_device_id: Spotify device id
+    param uri: A valid Spotify uri
+    param offset: Provide offset as an int or track uri to start playback at a particular position. (Works for playlist/album/list of tracks)
+    """
+    # Offset format: {“position”: <int>} or {“uri”: “<track uri>”}
+    if isinstance(offset, int):
+      o = { 'position' : offset }
+    elif isinstance(offset, str):
+      o = { 'uri' : offset }
+    else:
+      o = offset
+
+    device_name = self._map_spotify_devid_to_name(spotify_device_id) or spotify_device_id
+    try:
+      if isinstance(uri, str) and uri.find('track') > 0:
+        self.sp.start_playback(device_id=spotify_device_id, uris=[uri], offset=o)
+      elif isinstance(uri, list) and uri[0].find('track') > 0:
+        self.sp.start_playback(device_id=spotify_device_id, uris=uri, offset=o)
+      else:
+        self.sp.start_playback(device_id=spotify_device_id, context_uri=uri, offset=o)
+      # Save last played uri for potentially restoring list of tracks playback later
+      self._snapshot_uri = uri
+      # Log the appropriate messages based on uri type
+      self._log_playback_action(uri, device_name)
+    except spotipy.client.SpotifyException as e:
+      # This can occur when a cached device is used that has been reconnected/dropped/disconnected from Spotify
+      self.log('Error playing music on Spotify device ("{}"): {}'.format(device_name, e), level='ERROR')
+      return False
+    return True
+
+
+  def _get_spotify_device_devid(self, device_name, force_cc_update=False):
+    """
+    Get Spotify device id from the device name
+
+    This may require connecting Spotify app to a Chromecast device
+
+    param device_name: Spotify device name
+    """
+    # Check if Spotify is already connected to the device if device is not a CC or no CC update required
     dev_id = None
     is_cc_device = self._get_chromcast_device(device_name) is not None
     if not is_cc_device:
       self._last_cast_sc = None
     if not force_cc_update and (not is_cc_device or (is_cc_device and self._last_cast_sc)):
-      dev_id = self._get_spotify_device_devid(device_name)
+      dev_id = self._search_spotify_for_device(device_name)
 
     # We don't already have the device, look for a chromecast
-    if dev_id is None:
+    if dev_id is None and is_cc_device:
       if not self._register_spotify_on_cast_device(device_name):
-        if self._play_retry_count_cc < MAX_PLAY_ATTEMPTS_CC:
-          self.log('Retrying now...', level='ERROR')
-          self._play_retry_count_cc += 1
-          self.run_in(self.spotify_play_timer, 2, device=device, uri=uri, off_set=offset)
-        else:
-          self._play_retry_count_cc = 0
-          self.log('Exceeded max retries, the song ("{}") will not play on "{}".'.format(uri, device), level='WARNING')
-        return
+        # Failed to connect Spotify to Chromecast
+        return None
 
       # Look for our device again
-      dev_id = self._get_spotify_device_devid(device_name)
+      dev_id = self._search_spotify_for_device(device_name)
 
-    self._play_retry_count_cc = 0
-
-    if dev_id:
-      self._last_device = device_name
-      if self._play(dev_id, uri, offset):
-        self._log_playback_action(uri, device_name)
-    else:
-      self.log('Could not find device "{}" in Spotify, no song will play.'.format(device_name), level='WARNING')
-      # self.log('Discovered Chromecast devices: {}, Spotify devices: {}' \
-      #   .format(self.get_found_chromecasts(), ', '.join(self._spotify_devices.keys())), level='WARNING')
+    return dev_id
 
 
-  def _get_spotify_device_devid(self, device_name):
+  def _search_spotify_for_device(self, device_name):
     """ 
     Returns the Spotify device id given the name
 
@@ -373,29 +484,43 @@ class SpotifyClient(hass.Hass):
 
 
   def _get_chromcast_device(self, device_name):
-    """ 
+    """
     Returns the chromecast device object that matches the device_name
+    Uses CastDevice class to listen to the cast connection and let us know when an update is needed
 
     param device_name: The chromecast device name
     """
-    # Use cached chromecast if possible
-    if self._chromecasts:
-      for cast in self._chromecasts:
-        if cast.device.friendly_name == device_name:
-          # self.log('Using cached CC device.', level=self.DEBUG_LEVEL)
-          self._last_cast = cast
-          return cast
+    for cast in self._chromecasts.values():
+      if device_name == cast.name:
+        if cast.available:
+          self.log('Cached chromecast device used.', level=self.DEBUG_LEVEL)
+          return cast.get_cast()
+        else:
+          # Attempt to reconnect the unavailable cast
+          self.log('Attempting to reset cast connection for: {}'.format(cast.name), level=self.DEBUG_LEVEL)
+          cast.reset_cast_connection()
+          if cast.available:
+            return cast.get_cast()
 
-    chromecasts = pychromecast.get_chromecasts(tries=5, retry_wait=5, timeout=30)
-    self._chromecasts = chromecasts
+    # We have not discovered the cast yet or the reconnection attempt failed
+    chromecasts = pychromecast.get_chromecasts(tries=5, retry_wait=1, timeout=30)
 
+    _cast = None
     for cast in chromecasts:
-      if cast.device.friendly_name == device_name:
-        # self.log('Using new discovered CC device.', level=self.DEBUG_LEVEL)
-        self._last_cast = cast
-        return cast
+      if cast.name == device_name:
+          _cast = cast
 
-    return None
+      if cast.uuid not in self._chromecasts:
+        self.log('Found a new Chromecast device: {}'.format(cast.name), level=self.DEBUG_LEVEL)
+        c = CastDevice(cast, self, self.DEBUG_LEVEL)
+        self._chromecasts[c.uuid] = c
+      else:
+        # Try to update an existing CastDevice that is disconnected
+        if not self._chromecasts[cast.uuid].available:
+          self.log('Updated existing CastDevice: {}'.format(self._chromecasts[cast.uuid].name), level=self.DEBUG_LEVEL)
+          self._chromecasts[cast.uuid].set_cast(cast)
+
+    return _cast
 
 
   def _register_spotify_on_cast_device(self, cast_name):
@@ -412,8 +537,8 @@ class SpotifyClient(hass.Hass):
     try:
       cast.wait(timeout=3)
     except RuntimeError as e:
-      # We are already connected?
-      self.log('Chromecast threading error while waiting: {}.'.format(e), level='ERROR')
+      # We are already connected? Or we were connected and the thread died? Or no success connecting at all?
+      self.log('Chromecast threading error while waiting for "{}": {}.'.format(cast_name, e), level='ERROR')
       return False 
 
     cast_sc = SpotifyController(self._access_token, self._token_expires)
@@ -422,13 +547,13 @@ class SpotifyClient(hass.Hass):
     try:
       cast_sc.launch_app(timeout=10)
     except pychromecast.error.LaunchError as e:
-      self.log('Chromecast error waiting for status response from Spotify: "{}".'.format(e), level='ERROR')
+      self.log('Chromecast error waiting for status response from Spotify on "{}": "{}".'.format(cast_name, e), level='ERROR')
       return False
     except pychromecast.error.NotConnected as e:
-      self.log('Chromecast connection failed with: {}.'.format(e), level='ERROR')
+      self.log('Chromecast connection failed on "{}": {}.'.format(cast_name, e), level='ERROR')
       return False
     except pychromecast.error.PyChromecastStopped as e:
-      self.log('Chromecast threading error while launching app: {}.'.format(e), level='ERROR')
+      self.log('Chromecast threading error while launching app on "{}": {}.'.format(cast_name, e), level='ERROR')
       return False
 
     # Make sure everything was initialized correctly
@@ -468,54 +593,10 @@ class SpotifyClient(hass.Hass):
       track = self.get_track_info(uri[0])
       self.log('Playing "{}" tracks starting with "{}" by "{}" on "{}" speaker.'.format(len(uri), track['name'], track['artist'], device), level=self.DEBUG_LEVEL)
 
-
-  def _play(self, spotify_device_id, uri, offset=None):
-    """ 
-    Play music on Spotify device using valid spotify uri (track, playlist, artist, album) and device id 
-
-    param spotify_device_id: Spotify device id
-    param uri: A valid Spotify uri
-    param offset: Provide offset as an int or track uri to start playback at a particular position. (Works for playlist/album/list of tracks)
-    """
-    # Offset format: {“position”: <int>} or {“uri”: “<track uri>”}
-    if isinstance(offset, int):
-      o = { 'position' : offset }
-    elif isinstance(offset, str):
-      o = { 'uri' : offset }
-    else:
-      o = offset
-
-    # self.log('Playing URI: {} on device-id: {}, with offset: {}.'.format(uri, spotify_device_id, o), level=self.DEBUG_LEVEL)
-    try:
-      if isinstance(uri, str) and uri.find('track') > 0:
-        self.sp.start_playback(device_id=spotify_device_id, uris=[uri], offset=o)
-      elif isinstance(uri, list) and uri[0].find('track') > 0:
-        self.sp.start_playback(device_id=spotify_device_id, uris=uri, offset=o)
-      else:
-        self.sp.start_playback(device_id=spotify_device_id, context_uri=uri, offset=o)
-      # Save last played uri for potentially restoring list of tracks playback later
-      self._snapshot_uri = uri
-      self._play_retry_count_spotify = 0
-    except spotipy.client.SpotifyException as e:
-      # This can occur when a cached device is used that has been reconnected/dropped/disconnected from Spotify
-      device_name = self._map_spotify_devid_to_name(spotify_device_id) or 'unknown'
-      self.log('Error playing music on Spotify device ("{}"): {}'.format(device_name, e), level='ERROR')
-
-      # Retry request with a forced CC update
-      if self._play_retry_count_spotify < MAX_PLAY_ATTEMPTS_SPOTIY:
-        self.log('Retrying...', level='INFO')
-        self._play_retry_count_spotify += 1
-        self.run_in(self.spotify_play_timer, 1, device=device_name, uri=uri, off_set=offset, force_cc_update=True)
-      else:
-        self._play_retry_count_spotify = 0
-        self.log('Exceeded max retries.', level='WARNING')
-      return False
-    return True
-
   ######################   PLAY SPOTIFY MUSIC METHODS END   ########################
 
 
-  ######################   UTILITY SPOTIFY METHODS   ########################
+  ######################   SPOTIFY DEVICE CONTROLS METHODS   ########################
 
   def _spotify_controls_event_callback(self, event_name, data, kwargs):
     """
@@ -598,7 +679,7 @@ class SpotifyClient(hass.Hass):
     Sets the Spotify device's repeat state
 
     param state: Desired repeat state (track, context, or off)
-    param device: Spotify device id (or name if the spotify_play method has cached the device)
+    param device: Spotify device id (or name if the play method has cached the device)
       -> None will set repeat on the current device
     """
     if self.is_active:
@@ -620,7 +701,7 @@ class SpotifyClient(hass.Hass):
     Sets the Spotify device's shuffle state
 
     param state: Desired shuffle state (True/False)
-    param device: Spotify device id (or name if the spotify_play method has cached the device) (optional)
+    param device: Spotify device id (or name if the play method has cached the device) (optional)
       -> None will set shuffle on the current device
     """
     if self.is_active:
@@ -687,7 +768,7 @@ class SpotifyClient(hass.Hass):
     Seek to position in current track
 
     param position_ms: Desired track position in milliseconds
-    param device: Spotify device id (or name if the spotify_play method has cached the device)
+    param device: Spotify device id (or name if the play method has cached the device)
       -> None will set seek position in the current device
     """
     if self.is_active:
@@ -696,7 +777,8 @@ class SpotifyClient(hass.Hass):
         device_id = self._spotify_devices[device_id]
       self.sp.seek_track(position_ms, device_id)
 
-  ######################   UTILITY SPOTIFY METHODS END   ########################
+
+  ######################   SPOTIFY DEVICE CONTROLS METHODS END   ########################
 
 
   ######################   PLAYBACK SNAPSHOT METHODS   ########################
@@ -723,6 +805,7 @@ class SpotifyClient(hass.Hass):
       self._snapshot_info['context'] = result.get('context', {}).get('uri', False)
     self._snapshot_info['progress_ms'] = result['progress_ms']
 
+    self.log('Snapshot taken from: "{}".'.format(self._snapshot_info['device_name']), level=self.DEBUG_LEVEL)
     # self.pause()
 
   
@@ -752,11 +835,17 @@ class SpotifyClient(hass.Hass):
 
     dev = device if device else self._snapshot_info['device_name']
 
-    # Resume playing at the track we left off at
-    self.spotify_play(dev, uri, offset)
+    self.log('Restoring snapshot to: "{}".'.format(self.map_chromecasts(dev)), level=self.DEBUG_LEVEL)
 
+    # Resume playing at the track we left off at
+    self.play(dev, uri, offset)
     # Skip to the last position in the previously playing track
     self.seek_track(self._snapshot_info['progress_ms'])
+    self.run_in(self._restore_seek, 0.5, progress_ms=self._snapshot_info['progress_ms'])
+
+
+  def _restore_seek(self, kwargs):
+    self.seek_track(kwargs['progress_ms'])
 
   ######################   PLAYBACK SNAPSHOT METHODS END   ########################
 
@@ -1215,7 +1304,7 @@ class SpotifyClient(hass.Hass):
       if random_start:
         self.log('Random start is turned on.', level=self.DEBUG_LEVEL)
         offset = self._get_random_offset(to_play)
-      self.spotify_play(device, to_play, offset)
+      self.play(device, to_play, offset)
       self.repeat(repeat)
       if repeat != 'off': self.log('Repeat is turned on to "{}".'.format(repeat))
       self.shuffle(shuffle)
@@ -1634,7 +1723,7 @@ class SpotifyClient(hass.Hass):
     """
     name = cast.name
     try :
-      cast.disconnect()
+      cast.disconnect(timeout=10)
       self.log('Disconnected cast: "{}"'.format(name))
     except Exception as e:
       # self.log('Failed to disconnect "{}", error: {}'.format(name, e), level='WARNING')
@@ -1646,10 +1735,195 @@ class SpotifyClient(hass.Hass):
     Disconnect all discovered Chromecast devices from socket connection
     """
     for cast in self._chromecasts:
-      self._disconnect_cast(cast)
+      self._disconnect_cast(cast.get_cast())
 
 
   def terminate(self):
-    self._disconnect_casts()
+    # self._disconnect_casts()
+    pass
 
 
+
+class CastDevice:
+  """Representation of a Cast device on the network.
+
+  Code from: https://github.com/home-assistant/home-assistant/blob/dev/homeassistant/components/cast/media_player.py
+
+  This class is the holder of the pychromecast.Chromecast object and its socket client.
+  """
+
+  def __init__(self, chromecast, logger, debug_level='DEBUG'):
+    self._chromecast = None # pychromecast.Chromecast
+    self._cast_info = {} 
+    self.cast_status = None
+    self.media_status = None
+    self.connection_status = None
+    self._available = False
+    self._status_listener = None
+    self.logger = logger
+    self._debug_level = debug_level
+
+    self.set_cast(chromecast)
+
+  @property
+  def name(self):
+    return self._cast_info.get('friendly_name', None)
+
+  @property
+  def model_name(self):
+    return self._cast_info.get('model_name', None)
+
+  @property
+  def uuid(self):
+    return self._cast_info.get('uuid', None)
+
+  @property
+  def host(self):
+    return self._cast_info.get('host', None)
+
+  @property
+  def port(self):
+    return self._cast_info.get('port', None)
+
+  @property
+  def available(self):
+    """ Return True if the cast device is connected or connecting """
+    return self._available or self.connection_status == CONNECTION_STATUS_CONNECTING
+
+  @property
+  def complete_info(self):
+    return all([self.name, self.host, self.port, self.model_name, self.uuid])
+
+  def get_cast(self):
+    return self._chromecast
+
+  def reset_cast_connection(self):
+    """
+    Attempt to initialize a new cast connection after disconnection
+    """
+    if not self.complete_info():
+      self.logger.log('Incomplete cast information ({}), skipping reconnection attempt.'.format(self.name), self._debug_level)
+      return
+
+    info = (self.host, self.port, self.uuid, self.model_name, self.name)
+    chromecast = pychromecast._get_chromecast_from_host(info, tries=5, retry_wait=1, timeout=30)
+    self.set_cast(chromecast)
+
+  def set_cast(self, chromecast):
+    """ 
+    Initially setup using the cast device
+
+    param chromecast: pychromecast.Chromecast device
+    """
+    if self._chromecast is not None:
+      # The chromecast is already setup
+      self.logger.log('Chromecast is already setup: {}'.format(self._cast_info.friendly_name), self._debug_level)
+      return
+
+    self._cast_info['host'] = chromecast.host
+    self._cast_info['port'] = chromecast.port
+    self._cast_info['friendly_name'] = chromecast.device.friendly_name
+    self._cast_info['model_name'] = chromecast.device.model_name
+    self._cast_info['manufacturer'] = chromecast.device.manufacturer
+    self._cast_info['uuid'] = chromecast.device.uuid
+    self._cast_info['cast_type'] = chromecast.device.cast_type
+
+    self._chromecast = chromecast
+
+    self._status_listener = CastStatusListener(self, chromecast, self.logger, self._debug_level)
+
+    # Assume connection is successful until told otherwise
+    self._available = True
+
+  def new_cast_status(self, cast_status):
+    """ Handle updates of the cast status """
+    self.cast_status = cast_status
+    # self.logger.log('Received new cast device status on: {}'.format(self.name))
+
+  def new_media_status(self, media_status):
+    """ Handle updates of the media status """
+    self.media_status = media_status
+    # self.logger.log('Received new cast device media status on: {}'.format(self.name))
+
+  def new_connection_status(self, connection_status):
+    """ Handle updates of connection status """
+    self.connection_status = connection_status.status
+    self.logger.log(
+      "[{} ({}:{})] Received new cast device connection status: {}".format(
+      self.name,
+      self.host,
+      self.port,
+      connection_status.status,
+    ), self._debug_level)
+
+    if connection_status.status == CONNECTION_STATUS_DISCONNECTED:
+      self._available = False
+      self._invalidate()
+      return
+
+    new_available = connection_status.status == CONNECTION_STATUS_CONNECTED
+    if new_available != self._available:
+      # Connection status callbacks happen often when disconnected.
+      # Only update state when availability changed
+      self.logger.log(
+        "[{} ({}:{})] Cast device availability changed: {}".format(
+        self.name,
+        self.host,
+        self.port,
+        connection_status.status,
+      ), self._debug_level)
+      self._available = new_available
+
+  def _invalidate(self):
+    """ Invalidate some attributes """
+    self.logger.log('Cast ({}) is invalidated, reset connection to use it again.'.format(self.name), self._debug_level)
+    self._chromecast = None
+    self.cast_status = None
+    self.media_status = None
+    if self._status_listener is not None:
+      self._status_listener.invalidate()
+      self._status_listener = None
+
+
+class CastStatusListener:
+  """ Helper class to handle pychromecast status callbacks 
+
+  Code from: https://github.com/home-assistant/home-assistant/blob/dev/homeassistant/components/cast/helpers.py
+
+  Necessary because a CastDevice entity can create a new socket client
+  and therefore callbacks from multiple chromecast connections can
+  potentially arrive. This class allows invalidating past chromecast objects.
+  """
+
+  def __init__(self, cast_device, chromecast, logger, debug_level):
+    """Initialize the status listener."""
+    self._cast_device = cast_device
+    self._uuid = chromecast.uuid
+    self._valid = True
+    self.logger = logger
+    self._debug_level = debug_level
+
+    chromecast.register_status_listener(self)
+    chromecast.socket_client.media_controller.register_status_listener(self)
+    chromecast.register_connection_listener(self)
+
+  def new_cast_status(self, cast_status):
+    """Handle reception of a new CastStatus."""
+    if self._valid:
+      self._cast_device.new_cast_status(cast_status)
+
+  def new_media_status(self, media_status):
+    """Handle reception of a new MediaStatus."""
+    if self._valid:
+      self._cast_device.new_media_status(media_status)
+
+  def new_connection_status(self, connection_status):
+    """Handle reception of a new ConnectionStatus."""
+    if self._valid:
+      self._cast_device.new_connection_status(connection_status)
+
+  def invalidate(self):
+    """Invalidate this status listener.
+    All following callbacks won't be forwarded.
+    """
+    self._valid = False
