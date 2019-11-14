@@ -63,7 +63,7 @@ spotify_client:
 
 ### Play Event Parameters ('spotify.play'):
 
-**Event name**: If event_domain_name is specified, the event name will be event_domain_name + '.play' (Default: 'spotify.play')
+**Event name**: If event_domain_name is specified in the app config, the event name will be event_domain_name + '.play' (Default: 'spotify.play')
 
 #### Required:
 * **device**: Spotify connected device name (aliases may be used if you have defined device_aliases in the app config)
