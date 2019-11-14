@@ -33,7 +33,7 @@ spotify_client:
 * **country** (Optional - Default: Spotify account default): ISO 3166-1 alpha-2 country code format (ex: 'CA')
 * **language** (Optional - Default: Spotify account default): ISO 639 language code and an ISO 3166-1 alpha-2 country code, joined by an underscore (ex: 'en_CA')
 * **user_aliases** (Optional): Map of alias names to Spotify account usernames (Spotify usernames found in your account)
-* **device_aliases** (Optional): Map of alias device names to Spotify account device names (Spotify usernames found in your account)
+* **device_aliases** (Optional): Map of alias device names to Spotify account device names (Spotify device names found in your account)
 
 ```yaml
 # Full configuration example apps.yaml entry
