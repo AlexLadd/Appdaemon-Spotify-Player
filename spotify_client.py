@@ -133,32 +133,6 @@ class SpotifyClient(hass.Hass):
   def _renew_spotify_token(self, kwargs):
     """ Callback to renew spotify token """
     self._initialize_spotify_client()
-    # Update the CC SpotifyController credentials when token is updated (Sometimes the music stops around the time the token expires)
-    # If the last device used was a chromecast device and currently active than update its credentials
-    # if self._last_device and self.is_active:
-    #   cast = self._get_chromcast_device(self._last_device)
-    #   if cast:
-    #     self._update_cast_spotify_app_credentials()
-
-
-  def _update_cast_spotify_app_credentials(self):
-    """ 
-    Update the Spotify app credentials on the cast SpotifyController that is currently active
-
-    Currently experimental
-    """
-    if self._last_cast_sc:
-      try:
-        res = self._last_cast_sc.send_message({
-          "type": "setCredentials",
-          "credentials": self._access_token,
-          "expiresIn": self._token_expires,
-        })
-        self.log('Updated cast SpotifyController app credentials.', level=self.DEBUG_LEVEL)
-      except pychromecast.error.PyChromecastStopped as e:
-        self.log('Error updating cast SpotifyController app credentials: {}'.format(e), level='WARNING')
-    else:
-      self.log('Tried to update cast_sc credentials but self._last_cast_sc does not exist.', level='WARNING')
 
 
   def _initialize_spotify_client(self):
@@ -168,7 +142,7 @@ class SpotifyClient(hass.Hass):
     self._token_expires = expires
 
     if not access_token:
-      self.log('Did not retrieve access token information for Spotify.', level='WARNING')
+      self.log('Did not retrieve access token information for Spotify. SPOTIFY IS NOT INITIALIZED!', level='WARNING')
     else:
       self.log('Spotify client successfully initialized.', level=self.DEBUG_LEVEL)
       self.sp = spotipy.Spotify(auth=access_token)
@@ -370,7 +344,7 @@ class SpotifyClient(hass.Hass):
     """
     device_name = self.map_chromecasts(device)
 
-    # Only a list of tracks can be played
+    # Only a single uri or a list of tracks can be played
     if isinstance(uri, list):
       for u in uri:
         if not self.is_track_uri(u):
@@ -438,7 +412,7 @@ class SpotifyClient(hass.Hass):
     """
     Get Spotify device id from the device name
 
-    This may require connecting Spotify app to a Chromecast device
+    This may require connecting a Spotify app to a Chromecast device
 
     param device_name: Spotify device name
     """
@@ -470,13 +444,13 @@ class SpotifyClient(hass.Hass):
     """
     # Use cached Spotify device if possible
     if device_name in self._spotify_devices:
-      self.log('Cached Spotify device used.', level=self.DEBUG_LEVEL)
+      # self.log('Cached Spotify device used.', level=self.DEBUG_LEVEL)
       return self._spotify_devices[device_name]
     else:
       devs = self.sp.devices()
       for d in devs['devices']:
         if d['name'] == device_name:
-          self.log('Newly discovered Spotify device used.', level=self.DEBUG_LEVEL)
+          # self.log('Newly discovered Spotify device used.', level=self.DEBUG_LEVEL)
           self._spotify_devices[device_name] = d['id']
           return d['id']
 
@@ -493,7 +467,7 @@ class SpotifyClient(hass.Hass):
     for cast in self._chromecasts.values():
       if device_name == cast.name:
         if cast.available:
-          self.log('Cached chromecast device used.', level=self.DEBUG_LEVEL)
+          # self.log('Cached chromecast device used.', level=self.DEBUG_LEVEL)
           return cast.get_cast()
         else:
           # Attempt to reconnect the unavailable cast
@@ -511,11 +485,11 @@ class SpotifyClient(hass.Hass):
           _cast = cast
 
       if cast.uuid not in self._chromecasts:
-        self.log('Found a new Chromecast device: {}'.format(cast.name), level=self.DEBUG_LEVEL)
+        # self.log('Found a new Chromecast device: {}'.format(cast.name), level=self.DEBUG_LEVEL)
         c = CastDevice(cast, self, self.DEBUG_LEVEL)
         self._chromecasts[c.uuid] = c
       else:
-        # Try to update an existing CastDevice that is disconnected
+        # Try to update an existing CastDevice that is disconnected or failed
         if not self._chromecasts[cast.uuid].available:
           self.log('Updated existing CastDevice: {}'.format(self._chromecasts[cast.uuid].name), level=self.DEBUG_LEVEL)
           self._chromecasts[cast.uuid].set_cast(cast)
@@ -558,10 +532,10 @@ class SpotifyClient(hass.Hass):
 
     # Make sure everything was initialized correctly
     if not cast_sc.is_launched and not cast_sc.credential_error:
-      self.log('Failed to launch spotify controller due to timeout.', level='ERROR')
+      self.log('Failed to launch spotify controller due to timeout on "{}".'.format(cast_name), level='ERROR')
       return False
     if not cast_sc.is_launched and cast_sc.credential_error:
-      self.log('Failed to launch spotify controller due to credentials error.', level='ERROR')
+      self.log('Failed to launch spotify controller due to credentials error on "{}".'.format(cast_name), level='ERROR')
       return False
 
     return True
@@ -668,16 +642,91 @@ class SpotifyClient(hass.Hass):
 
   @property
   def is_active(self):
-    """ Returns if Spotify is currently connected to a device """
-    return self.sp.current_playback() is not None
+    """ Returns if Spotify has recently played music """
+    active = False
+    try:
+      active = self.sp.current_playback() is not None
+    except spotipy.client.SpotifyException:
+      # Needed to catch improper credentials error
+      pass
+
+    return active
+
+
+  @property
+  def state(self):
+    """ Return the state of the Spotify player """
+    if not self.is_active:
+      return 'off'
+
+    playing = self.get_playback_info().get('is_playing', None)
+    if playing is None:
+      return 'idle'
+    elif playing:
+      return 'playing'
+    else:
+      return 'paused'
+
+  @property
+  def current_track(self):
+    playback_info = self.get_playback_info()
+    if not playback_info: # Nothing is currently playing
+      return None
+
+    return playback_info['item'].get('name', 'unknown')
+
+
+  @property
+  def current_artist(self):
+    playback_info = self.get_playback_info()
+    if not playback_info: # Nothing is currently playing
+      return None
+
+    artists = [artist['name'] for artist in playback_info['item']['artists']]
+    return ', '.join(artists)
+
+  
+  @property
+  def current_album(self):
+    playback_info = self.get_playback_info()
+    if not playback_info: # Nothing is currently playing
+      return None
+
+    if 'album' in playback_info['item']:
+      return playback_info['item']['album']['name']
+    else:
+      return None
+
+
+  @property
+  def progress_ms_remaining(self):
+    """ Return the number of milliseconds remaining in the currently playing song (0 when song is done/nothing playing) 
+    
+    Could be used to verify if a song is playing/paused/active (paused song will not be 0 unless it is finished)"""
+    try:
+      result = self.get_playback_info()
+      return result['progress_ms']
+    except:
+      return 0
 
 
   def get_active_device(self):
     """ Get the active Spotify speaker name """
-    playback_info = self.sp.current_playback()
+    playback_info = self.get_playback_info()
     if playback_info:
       return playback_info['device']['name']
     return None
+
+
+  def get_playback_info(self):
+    """ Return the current playback info if Spotify is active """
+    playback_info = {}
+    if self.is_active:
+      try:
+        playback_info = self.sp.current_playback()
+      except:
+        pass
+    return playback_info
 
 
   def repeat(self, state, device=None):
@@ -698,7 +747,7 @@ class SpotifyClient(hass.Hass):
   def repeat_state(self):
     """  Return the repeat state for the current device """
     if self.is_active:
-      return self.sp.current_playback().get('repeat_state')
+      return self.get_playback_info().get('repeat_state')
     return None
   
 
@@ -720,7 +769,7 @@ class SpotifyClient(hass.Hass):
   def shuffle_state(self):
     """ Return the shuffle state for the current device """
     if self.is_active:
-      return self.sp.current_playback().get('shuffle_state')
+      return self.get_playback_info().get('shuffle_state')
     return None
 
 
@@ -752,7 +801,7 @@ class SpotifyClient(hass.Hass):
   def current_volume(self):
     """ Returns the current active device volume level in percent """
     if self.is_active:
-      return self.sp.current_playback().get('device', {}).get('volume_percent', None)
+      return self.get_playback_info().get('device', {}).get('volume_percent', None)
     else:
       return 0
 
@@ -761,12 +810,12 @@ class SpotifyClient(hass.Hass):
     """ 
     Set the volume level on the currently device
     
-    param volume: Desired volume level (0 - 1)
+    param volume: Desired volume level (1 - 100)
     """
     if self.is_active:
-      if 1 < volume < 100:
-        volume = volume / 100
-      self.sp.volume(int(volume*100))
+      if 0 < volume < 1:
+        volume = int(volume*100)
+      self.sp.volume(volume)
 
 
   def seek_track(self, position_ms, device=None):
@@ -784,11 +833,6 @@ class SpotifyClient(hass.Hass):
       self.sp.seek_track(position_ms, device_id)
 
 
-  ######################   SPOTIFY DEVICE CONTROLS METHODS END   ########################
-
-
-  ######################   PLAYBACK SNAPSHOT METHODS   ########################
-
   def take_playback_snapshot(self):
     """ 
     Take snapshot to allow us to resume playback later with this information
@@ -796,9 +840,9 @@ class SpotifyClient(hass.Hass):
     # Reset previous snapshot info
     self._snapshot_info = {}
 
-    result = self.sp.current_playback()
-    if not result: # Nothing is currently playing
-      self.log('Nothing is currently playling.', level='INFO')
+    result = self.get_playback_info()
+    if not result:
+      self.log('Nothing is currently playling, no snapshot will be taken.', level='INFO')
       return
 
     self._snapshot_info['device_id'] = result['device']['id']
@@ -814,7 +858,7 @@ class SpotifyClient(hass.Hass):
     self.log('Snapshot taken from: "{}".'.format(self._snapshot_info['device_name']), level=self.DEBUG_LEVEL)
     # self.pause()
 
-  
+
   def restore_playback_from_snapshot(self, device=None):
     """ 
     Resume playback with the info from the previous snapshot
@@ -847,13 +891,9 @@ class SpotifyClient(hass.Hass):
     self.play(dev, uri, offset)
     # Skip to the last position in the previously playing track
     self.seek_track(self._snapshot_info['progress_ms'])
-    self.run_in(self._restore_seek, 0.5, progress_ms=self._snapshot_info['progress_ms'])
+    # self.run_in(lambda *_: self.seek_track(self._snapshot_info['progress_ms']), 0.1)
 
-
-  def _restore_seek(self, kwargs):
-    self.seek_track(kwargs['progress_ms'])
-
-  ######################   PLAYBACK SNAPSHOT METHODS END   ########################
+  ######################   SPOTIFY DEVICE CONTROLS METHODS END   ########################
 
 
   ######################   MUSIC RECOMMENDATION METHODS   ########################
@@ -869,19 +909,31 @@ class SpotifyClient(hass.Hass):
     param limit: Limit of tracks to return (1-100)
     """
     if not any([artists, genres, tracks]):
-      self.log('Please specify one or more of artists, genres, or tracks.', level='WARNING')
+      self.log('Please specify one or more of artists, genres, and tracks.', level='WARNING')
       return []
 
     if isinstance(tracks, str):
       if not self.is_track_uri(tracks): # assumes track name was passed in
         tracks = self.get_track_info(tracks).get('uri', tracks)
       tracks = [tracks]
+    elif isinstance(tracks, list):
+      for i, track in enumerate(tracks):
+        if not self.is_track_uri(track):
+          track = self.get_track_info(track).get('uri', track)
+          tracks[i] = track
+
     if isinstance(genres, str):
       genres = [genres]
+
     if isinstance(artists, str):
       if not self.is_artist_uri(artists): # assumes artist name was passed in
         artists = self.get_artist_info(artists).get('uri', artists)
       artists = [artists]
+    elif isinstance(artists, list):
+      for i, artist in enumerate(artists):
+        if not self.is_artist_uri(artist):
+          artist = self.get_artist_info(artist).get('uri', artist)
+          artists[i] = artist
 
     results = self.sp.recommendations(seed_artists=artists, seed_genres=genres, seed_tracks=tracks, limit=limit, min_popularity=50)
     return [u['uri'] for u in results['tracks']]
@@ -945,14 +997,15 @@ class SpotifyClient(hass.Hass):
     param artist: Spotify artist uri or name
     param country: Valid ISO 3166-1 alpha-2 country code
     """
-    if not self.is_artist_uri(artist):
-      artist = self.get_artist_info(artist).get('uri', artist)
+    artist_uri = artist
+    if not self.is_artist_uri(artist_uri):
+      artist_uri = self.get_artist_info(artist_uri).get('uri', artist)
 
-    if not self.is_artist_uri(artist):
-      self.log('Invalid artist: {}.'.format(artist))
-      return []
+      if not self.is_artist_uri(artist_uri):
+        self.log('Invalid artist: {}.'.format(artist))
+        return []
 
-    results = self.sp.artist_top_tracks(artist, country=(country or self._country))
+    results = self.sp.artist_top_tracks(artist_uri, country=(country or self._country))
     return [u['uri'] for u in results['tracks']]
 
 
@@ -1032,14 +1085,15 @@ class SpotifyClient(hass.Hass):
 
     param artist: Spotify artist uri or name
     """
-    if not self.is_artist_uri(artist):
-      artist = self.get_artist_info(artist).get('uri', artist)
+    artist_uri = artist
+    if not self.is_artist_uri(artist_uri):
+      artist_uri = self.get_artist_info(artist_uri).get('uri', artist)
 
-    if not self.is_artist_uri(artist):
-      self.log('Invalid artist: {}.'.format(artist))
-      return []
+      if not self.is_artist_uri(artist_uri):
+        self.log('Invalid artist: {}.'.format(artist))
+        return []
 
-    related = self.sp.artist_related_artists(artist)
+    related = self.sp.artist_related_artists(artist_uri)
     return [u['uri'] for u in related['artists']]
 
 
@@ -1049,16 +1103,17 @@ class SpotifyClient(hass.Hass):
 
     param album: Spotify album uri or name
     param limit: The number of tracks to return
-    param offset: The index of the first album to return
+    param offset: The index of the first album track to return
     """
-    if not self.is_album_uri(album):
-      album = self.get_album_info(album).get('uri', album)
+    album_uri = album
+    if not self.is_album_uri(album_uri):
+      album_uri = self.get_album_info(album_uri).get('uri', album)
 
-    if not self.is_album_uri(album):
-      self.log('Invalid album: {}.'.format(album), level='WARNING')
-      return []
+      if not self.is_album_uri(album_uri):
+        self.log('Invalid album: {}.'.format(album), level='WARNING')
+        return []
 
-    results = self.sp.album_tracks(album, limit=limit, offset=offset)
+    results = self.sp.album_tracks(album_uri, limit=limit, offset=offset)
     return [t['uri'] for t in results['items']]
 
 
@@ -1074,16 +1129,18 @@ class SpotifyClient(hass.Hass):
     """ 
     valid_album_types = ['album', 'single', 'appears_on', 'compilation']
     if album_type and album_type not in valid_album_types:
-      self.log('Invalid album_type: {}, setting album_type to None.'.format(album_type), level='WARNING')
+      self.log('Invalid album_type: {}, setting album_type to None. Valid types are: {}'.format(album_type, valid_album_types), level='WARNING')
+      album_type = None
 
-    if not self.is_artist_uri(artist):
-      artist = self.get_artist_info(artist).get('uri', artist)
+    artist_uri = artist
+    if not self.is_artist_uri(artist_uri):
+      artist_uri = self.get_artist_info(artist_uri).get('uri', artist)
 
-    if not self.is_artist_uri(artist):
-      self.log('Invalid artist: {}.'.format(artist))
-      return []
-    
-    results = self.sp.artist_albums(artist, album_type=album_type, country=(country or self._country), limit=limit, offset=offset)
+      if not self.is_artist_uri(artist_uri):
+        self.log('Invalid artist: {}.'.format(artist))
+        return []
+
+    results = self.sp.artist_albums(artist_uri, album_type=album_type, country=(country or self._country), limit=limit, offset=offset)
     return [a['uri'] for a in results['items']]
 
 
@@ -1173,7 +1230,7 @@ class SpotifyClient(hass.Hass):
     """
     Returns playlist info as a dictionary
 
-    param playlist: Spotify playlist uri
+    param playlist: Valid Spotify playlist uri
     param username: The user that the playlist belongs to
     """
     if not self.is_playlist_uri(playlist):
@@ -1181,16 +1238,16 @@ class SpotifyClient(hass.Hass):
       return {}
     
     username = self._map_spotify_usernames(username)
-    playlists = self.sp.user_playlist(username, playlist)
+    pl_info = self.sp.user_playlist(username, playlist)
 
     return {
-      'name' : playlists['name'],
-      'uri' : playlists['uri'],
-      'owner_name' : playlists['owner']['display_name'],
-      'owner_id' : playlists['owner']['id'],
-      'description' : playlists['description'],
-      'num_tracks' : playlists['tracks']['total'],
-      'tracks' : [t['track']['uri'] for t in playlists['tracks']['items']],
+      'name' : pl_info['name'],
+      'uri' : pl_info['uri'],
+      'owner_name' : pl_info['owner']['display_name'],
+      'owner_id' : pl_info['owner']['id'],
+      'description' : pl_info['description'],
+      'num_tracks' : pl_info['tracks']['total'],
+      'tracks' : [t['track']['uri'] for t in pl_info['tracks']['items']],
     }
 
 
@@ -1201,7 +1258,8 @@ class SpotifyClient(hass.Hass):
     param track: Spotify track uri or name
     param artist: Spotify artist uri or name
     """
-    if not self.is_track_uri(track):
+    track_uri = track
+    if not self.is_track_uri(track_uri):
       results = None
       if artist:
         results = self.sp.search(q='artist:' + artist + ' track:' + track, type='track', limit=1)
@@ -1210,13 +1268,15 @@ class SpotifyClient(hass.Hass):
 
       # Check if we found a result
       if results['tracks']['items']:
-        track = results['tracks']['items'][0]['uri']
-      else:
+        track_uri = results['tracks']['items'][0]['uri']
+
+      if not self.is_track_uri(track_uri):
+        self.log('Invalid track: {}.'.format(track), level='WARNING')
         return {}
 
-    result = self.sp.track(track)
+    result = self.sp.track(track_uri)
     return {
-      'uri' : track,
+      'uri' : track_uri,
       'name' : result['name'],
       'artist' : result['album']['artists'][0]['name'], # This will only get the first artist (potentially multiple per song)
       'artist_uri' : result['album']['artists'][0]['uri'],
@@ -1232,9 +1292,9 @@ class SpotifyClient(hass.Hass):
     param artist: Artist uri or name, album uri, or track uri from the desired artist
     """
     if self.is_track_uri(artist):
-      artist_uri = self.get_track_info(artist)['artist_uri']
+      artist_uri = self.get_track_info(artist).get('artist_uri', artist)
     elif self.is_album_uri(artist):
-      artist_uri = self.get_album_info(artist)['artist_uri']
+      artist_uri = self.get_album_info(artist).get('artist_uri', artist)
     else:
       artist_uri = artist
 
@@ -1243,9 +1303,9 @@ class SpotifyClient(hass.Hass):
       if results['artists']['items']:
         artist_uri = results['artists']['items'][0]['uri']
 
-    if not self.is_artist_uri(artist_uri):
-      self.log('Invalid artist: {}.'.format(artist), level='WARNING')
-      return {}
+      if not self.is_artist_uri(artist_uri):
+        self.log('Invalid artist: {}.'.format(artist), level='WARNING')
+        return {}
 
     results = self.sp.artist(artist_uri)
     return {
@@ -1262,17 +1322,23 @@ class SpotifyClient(hass.Hass):
     param album: Spotify album uri or name
     param artist: Spotify artist uri or name
     """
-    if not self.is_album_uri(album):
-      results = None
+    album_uri = album
+    if not self.is_album_uri(album_uri):
       if artist:
         results = self.sp.search(q='album:' + album + ' artist:' + artist, type='album', limit=1)
       else:
         results = self.sp.search(q='album:' + album, type='album', limit=1)
-      album = results['albums']['items'][0]['uri']
+      
+      if results['albums']['items']:
+        album_uri = results['albums']['items'][0]['uri']
+
+      if not self.is_album_uri(album_uri):
+        self.log('Invalid album: {}.'.format(album), level='WARNING')
+        return {}
     
-    result = self.sp.album(album)
+    result = self.sp.album(album_uri)
     return {
-      'uri' : album,
+      'uri' : album_uri,
       'num_tracks' : result['total_tracks'],
       'name' : result['name'],
       'artist' : result['artists'][0]['name'], # This will only get the first artist (potentially multiple per song)
@@ -1312,11 +1378,11 @@ class SpotifyClient(hass.Hass):
         offset = self._get_random_offset(to_play)
       self.play(device, to_play, offset)
       self.repeat(repeat)
-      if repeat != 'off': self.log('Repeat is turned on to "{}".'.format(repeat))
+      if repeat != 'off': self.log('Repeat is turned on to "{}".'.format(repeat), level=self.DEBUG_LEVE)
       self.shuffle(shuffle)
       if shuffle: self.log('Shuffle is turned on.')
     else:
-      self.log('Nothing was found matching your parameters. No music will play.', level='INFO')
+      self.log('Nothing was found matching your "{}" event parameters. No music will play.'.format(self._event_play), level='INFO')
 
 
   def get_recommendation(self, data):
@@ -1335,15 +1401,15 @@ class SpotifyClient(hass.Hass):
     try:
       num_tracks = int(d.get('tracks', 0))
     except ValueError:
-      self.log('Please specifiy a number for "tracks".', level=self.DEBUG_LEVEL)
+      self.log('Please specifiy a number for "tracks".', level='WARNING')
       num_tracks = 0
 
     to_play = None
     if not similar:
       # Check if a uri was passed in
-      to_play = self._get_media_from_uri(data)
+      to_play = self._check_for_uri(data)
     if not to_play:
-      # Nothing was found yet, make a recommendation
+      # Nothing uri was found, make a recommendation
       to_play = self._get_recommendation(data)
 
     if to_play:
@@ -1353,14 +1419,14 @@ class SpotifyClient(hass.Hass):
       elif multiple:
         self.log('Multiple songs have been requested to play.', level=self.DEBUG_LEVEL)
         to_play = self.get_multiple_tracks(to_play)
-      elif num_tracks > 0: # User specified a specific number of tracks they would like to hear
-        self.log('"{}" tracks have been requested to play.'.format(num_tracks), level=self.DEBUG_LEVEL)
+      elif num_tracks > 0: # User defined a specific number of tracks they would like to hear
+        self.log('"{}" songs have been requested to play.'.format(num_tracks), level=self.DEBUG_LEVEL)
         to_play = self.get_number_of_tracks(to_play, num_tracks, similar, random_search)
 
     return to_play
 
 
-  def _get_media_from_uri(self, data):
+  def _check_for_uri(self, data):
     """
     Checks for a Spotify uri in the data and return the track/playlist/artist/album uri if found
 
@@ -1382,26 +1448,29 @@ class SpotifyClient(hass.Hass):
 
     if track:
       valid = True
-      if isinstance(track, list):
+      if self.is_track_uri(track) and multiple: # User wants multiple songs
+        return ''
+      elif isinstance(track, list):
         for u in track:
           if not self.is_track_uri(u):
             valid = False
       elif not self.is_track_uri(track):
         valid = False
-      elif self.is_track_uri(track) and multiple: # User wants multiple songs
-        return ''
       if valid:
         self.log("Found a track uri or list of track uri's.", level=self.DEBUG_LEVEL)
         to_play = track
-    elif playlist:
+
+    elif playlist and not to_play:
       if self.is_playlist_uri(playlist):
         self.log('Found a playlist uri.', level=self.DEBUG_LEVEL)
         to_play = playlist
-    elif album:
+
+    elif album and not to_play:
       if self.is_album_uri(album):
         self.log('Found a album uri.', level=self.DEBUG_LEVEL)
         to_play = album
-    elif artist:
+
+    elif artist and not to_play:
       if self.is_artist_uri(artist):
         self.log('Found a artist uri.', level=self.DEBUG_LEVEL)
         to_play = artist
@@ -1591,7 +1660,7 @@ class SpotifyClient(hass.Hass):
     """
     Ensures the return uri will contain a Spotify uri or list of track uri's that will play multiple songs
 
-    param uri: A valid Spotify uri or list of uri's
+    param uri: A valid Spotify uri or list of track uri's
     """
     if isinstance(uri, str) and self.is_track_uri(uri):
       tracks = self.get_spotify_recommendation(tracks=uri)
@@ -1646,7 +1715,7 @@ class SpotifyClient(hass.Hass):
     if not search_artist:
       search_artist = self.get_artist_info(search_uri).get('uri', None)
 
-    # Add artist album tracks until we reach our desired number of tracks
+    # Add artist tracks until we reach our desired number of tracks
     if search_artist:
       tracks = self.get_artist_tracks(search_artist, num_tracks-len(res), similar, random_search)
       res += tracks
@@ -1657,7 +1726,7 @@ class SpotifyClient(hass.Hass):
         tracks = self.get_spotify_recommendation(artists=search_artist, limit=num_tracks-len(res))
         res += tracks
 
-    return res
+    return res[:num_tracks]
 
 
   def get_single_track(self, uri, random_track=False):
@@ -1678,9 +1747,9 @@ class SpotifyClient(hass.Hass):
     if self.is_track_uri(uri):
       return uri
     if self.is_playlist_uri(uri):
-      tracks = self.get_playlist_info(uri)['tracks']
+      tracks = self.get_playlist_info(uri).get('tracks', [])
     if self.is_album_uri(uri):
-      tracks = self.get_album_info(uri)['tracks']
+      tracks = self.get_album_info(uri).get('tracks', [])
     elif self.is_artist_uri(uri):
       albums = self.get_artist_albums(uri)
       if albums:
@@ -1688,8 +1757,8 @@ class SpotifyClient(hass.Hass):
           album = random.choice(albums)
         else:
           album = album[0]
-        tracks = self.get_album_info(album)['tracks']
-    
+        tracks = self.get_album_info(album).get('tracks', [])
+
     # We didn't find anything
     if not tracks:
       return uri
@@ -1721,39 +1790,23 @@ class SpotifyClient(hass.Hass):
 
   ######################   SPOTIFY PLAY EVENT HANDLING METHODS END   ########################
 
-  def _disconnect_cast(self, cast):
-    """ 
-    Disconnect Chromecast device from socket connection
-
-    param cast: The Chromecast device to disconnect
-    """
-    name = cast.name
-    try :
-      cast.disconnect(timeout=10)
-      self.log('Disconnected cast: "{}"'.format(name))
-    except Exception as e:
-      # self.log('Failed to disconnect "{}", error: {}'.format(name, e), level='WARNING')
-      pass
-
-
   def _disconnect_casts(self):
     """ 
     Disconnect all discovered Chromecast devices from socket connection
     """
-    for cast in self._chromecasts:
-      self._disconnect_cast(cast.get_cast())
+    for cast in self._chromecasts.values():
+      cast.stop()
 
 
   def terminate(self):
-    # self._disconnect_casts()
-    pass
+    self._disconnect_casts()
 
 
 
 class CastDevice:
   """Representation of a Cast device on the network.
 
-  Code from: https://github.com/home-assistant/home-assistant/blob/dev/homeassistant/components/cast/media_player.py
+  Modified version of: https://github.com/home-assistant/home-assistant/blob/dev/homeassistant/components/cast/media_player.py
 
   This class is the holder of the pychromecast.Chromecast object and its socket client.
   """
@@ -1805,9 +1858,9 @@ class CastDevice:
 
   def reset_cast_connection(self):
     """
-    Attempt to initialize a new cast connection after disconnection
+    Attempt to initialize a new cast connection after disconnected/failed
     """
-    if not self.complete_info():
+    if not self.complete_info:
       self.logger.log('Incomplete cast information ({}), skipping reconnection attempt.'.format(self.name), self._debug_level)
       return
 
@@ -1823,7 +1876,7 @@ class CastDevice:
     """
     if self._chromecast is not None:
       # The chromecast is already setup
-      self.logger.log('Chromecast is already setup: {}'.format(self._cast_info.friendly_name), self._debug_level)
+      self.logger.log('Chromecast is already setup: {}'.format(self.name), self._debug_level)
       return
 
     self._cast_info['host'] = chromecast.host
@@ -1844,23 +1897,17 @@ class CastDevice:
   def new_cast_status(self, cast_status):
     """ Handle updates of the cast status """
     self.cast_status = cast_status
-    # self.logger.log('Received new cast device status on: {}'.format(self.name))
+    # self.logger.log('[{}] Received new cast device status on.'.format(self.name))
 
   def new_media_status(self, media_status):
     """ Handle updates of the media status """
     self.media_status = media_status
-    # self.logger.log('Received new cast device media status on: {}'.format(self.name))
+    # self.logger.log('[{}] Received new cast device media status on.'.format(self.name))
 
   def new_connection_status(self, connection_status):
     """ Handle updates of connection status """
     self.connection_status = connection_status.status
-    self.logger.log(
-      "[{} ({}:{})] Received new cast device connection status: {}".format(
-      self.name,
-      self.host,
-      self.port,
-      connection_status.status,
-    ), self._debug_level)
+    # self.logger.log("[{}] Received new cast device connection status: {}".format(self.name, connection_status.status), self._debug_level)
 
     if connection_status.status == CONNECTION_STATUS_DISCONNECTED:
       self._available = False
@@ -1871,18 +1918,26 @@ class CastDevice:
     if new_available != self._available:
       # Connection status callbacks happen often when disconnected.
       # Only update state when availability changed
-      self.logger.log(
-        "[{} ({}:{})] Cast device availability changed: {}".format(
-        self.name,
-        self.host,
-        self.port,
-        connection_status.status,
-      ), self._debug_level)
+      # self.logger.log("[{}] Cast device availability changed: {}".format(self.name, connection_status.status), self._debug_level)
       self._available = new_available
+
+  def stop(self):
+    if self._chromecast is None:
+      return
+
+    try :
+      self._chromecast.disconnect(timeout=10)
+      # self.logger.log('[{}] Disconnected from chromecast socket.'.format(self.name), level=self._debug_level)
+    except Exception as e:
+      # self.logger.log('[{}] Failed to disconnect, error: {}'.format(self.name, e), level='WARNING')
+      pass
+
+    self._available = False
+    self._invalidate()
 
   def _invalidate(self):
     """ Invalidate some attributes """
-    self.logger.log('Cast ({}) is invalidated, reset connection to use it again.'.format(self.name), self._debug_level)
+    # self.logger.log('[{}] Cast is invalidated, reset connection to use it again.'.format(self.name), self._debug_level)
     self._chromecast = None
     self.cast_status = None
     self.media_status = None
@@ -1894,7 +1949,7 @@ class CastDevice:
 class CastStatusListener:
   """ Helper class to handle pychromecast status callbacks 
 
-  Code from: https://github.com/home-assistant/home-assistant/blob/dev/homeassistant/components/cast/helpers.py
+  Modified version of: https://github.com/home-assistant/home-assistant/blob/dev/homeassistant/components/cast/helpers.py
 
   Necessary because a CastDevice entity can create a new socket client
   and therefore callbacks from multiple chromecast connections can
