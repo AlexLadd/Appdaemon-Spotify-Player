@@ -15,7 +15,7 @@ can be useful when making a TTS announcement and restoring the music afterwards.
 Copy the contents of [spotify_client.py](https://github.com/AlexLadd/Appdaemon-Spotify-Player/blob/master/spotify_client.py) to
 your Appdaemon apps folder. For Appdaemon installation follow the instructions [here](https://appdaemon.readthedocs.io/en/latest/INSTALL.html). 
 
-### Required Dependencies:
+### Dependencies:
 * **spotipy**
 * **voluptuous**
 * **BeautifulSoup**
